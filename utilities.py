@@ -43,3 +43,34 @@ def oneinv(x):
     return y
 
 
+class SparseCat(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, y, dim):
+        z = torch.cat([x, y], dim)
+        ctx.save_for_backward(torch.LongTensor([x.shape[dim]]).squeeze(),
+                              torch.LongTensor([dim]).squeeze())
+        return z
+    
+    @staticmethod
+    def backward(ctx, gradient):
+        x_shape, dim = ctx.saved_tensors
+        
+        gradient = gradient.coalesce()
+        indices, values = gradient.indices(), gradient.values()
+
+        x_indices = indices[dim, :] < x_shape
+        y_indices = indices[dim, :] >= x_shape
+        x_values = values[x_indices]
+        y_values = values[y_indices]
+        x_indices = indices[:, x_indices]
+        y_indices = indices[:, y_indices]
+        y_indices[dim, :] -= x_shape
+
+        dimensions = list(gradient.shape)
+        dimensions[dim] = x_shape
+        gradient_x = torch.sparse_coo_tensor(x_indices, x_values, dimensions)
+        dimensions[dim] = gradient.shape[dim]-x_shape
+        gradient_y = torch.sparse_coo_tensor(y_indices, y_values, dimensions)
+        
+        return gradient_x, gradient_y, None
+sparse_cat = SparseCat.apply

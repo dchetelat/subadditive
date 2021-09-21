@@ -134,7 +134,33 @@ class Cat(SubadditiveLayer):
         return torch.cat([input_, self.layer(input_)], dim=0)
     
     def upper(self, input_):
-        return torch.cat([input_, self.layer.upper(input_)])
+        return torch.cat([input_, self.layer.upper(input_)], dim=0)
+    
+    def needs_bounding(self):
+        return torch.cat([
+            torch.BoolTensor([False for _ in range(self.in_size)]),
+            self.layer.needs_bounding()
+        ])
+
+    
+class SparseCat(SubadditiveLayer):
+    def __init__(self, layer):
+        super().__init__()
+        self.layer = layer
+        self.in_size = self.layer.in_size
+        self.out_size = self.layer.in_size + self.layer.out_size
+    
+    def forward(self, input_):
+        if input_.is_sparse:
+            return sparse_cat(input_, self.layer(input_), 0)
+        else:
+            return torch.cat([input_, self.layer(input_)], dim=0)
+    
+    def upper(self, input_):
+        if input_.is_sparse:
+            return sparse_cat(input_, self.layer.upper(input_), 0)
+        else:
+            return torch.cat([input_, self.layer.upper(input_)], dim=0)
     
     def needs_bounding(self):
         return torch.cat([
@@ -187,16 +213,17 @@ def get_extended_lp(A, b, c, vtypes, layer):
     return extended_A, extended_b, extended_c, extended_vtypes
 
 
-def get_sparse_extended_lp(integral_A, continuous_A, b, c, vtypes, layer):
-    device = integral_A_sparse.device
+def get_sparse_extended_lp(integral_A, continuous_A, b, integral_c, continuous_c, vtypes, layer):
+    device = integral_A.device
     integral_A = layer(integral_A)
     continuous_A = layer.upper(continuous_A)
     slack_A = -torch.eye(layer.out_size, device=device)[:, layer.needs_bounding()].to(device).to_sparse()
     
     extended_integral_A = integral_A
-    extended_continuous_A = torch.cat([continuous_A, slack_A], axis=1)
+    extended_continuous_A = sparse_cat(continuous_A, slack_A, 1)
     extended_b = layer(b)
-    extended_c = torch.cat([c, torch.zeros(slack_A.shape[1], device=device)], dim=0)
+    extended_integral_c = integral_c
+    extended_continuous_c = torch.cat([continuous_c, torch.zeros(slack_A.shape[1], device=device)], dim=0)
     extended_vtypes = vtypes + [GRB.CONTINUOUS for _ in range(slack_A.shape[1])]
 
-    return extended_integral_A, extended_continuous_A, extended_b, extended_c, extended_vtypes
+    return extended_integral_A, extended_continuous_A, extended_b, extended_integral_c, extended_continuous_c, extended_vtypes
