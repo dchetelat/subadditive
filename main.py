@@ -32,11 +32,12 @@ def solve_instance(instance_path, save_folder, seed, gomory_initialization):
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        A, b, c, vtypes = load_instance(str(instance_path), device=DEVICE, add_variable_bounds=False, presolve=True)
-        optimal_value, optimal_solution = solve_ilp(A, b, c, vtypes)
+        A, b, c, vtypes = load_instance(str(instance_path), device="cpu", add_variable_bounds=False, presolve=True)
+        _, optimal_solution = solve_ilp(A, b, c, vtypes)
         
         if OBJECTIVE_NOISE > 0:
             c = perturb_objective(A, b, c, vtypes, optimal_solution)
+        optimal_value = optimal_solution@c
         
         gomory_bounds = compute_gomory_bounds(A, b, c, vtypes, nb_rounds=2)
         lp_value = gomory_bounds[0]
@@ -67,6 +68,10 @@ def train_subadditive(A, b, c, vtypes, info, gomory_initialization):
     if gomory_initialization:
         gomory_initialization_(dual_function, A, b, c, vtypes)
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=LEARNING_RATE)
+
+    A = A.to(device)
+    b = b.to(device)
+    c = c.to(device)
         
     best_bound, best_bounds = -np.inf, []
     target, basis_start = None, None
@@ -126,26 +131,38 @@ def perturb_objective(A, b, c, vtypes, optimal_solution):
 
 # Main code
 
-NB_WORKERS = 3
+NB_WORKERS = 14
 NB_INSTANCES = 100
 NB_ITERATIONS = 10000
 DEVICE = "cuda"
 
+# instance_set = "setcover"
+# LEARNING_RATE = 1e-3
+# TARGET_NOISE = 1e-4
+# OBJECTIVE_NOISE = 1e-3
+
+# instance_set = "cauctions"
+# LEARNING_RATE = 1e-3
+# TARGET_NOISE = 1e-4
+# OBJECTIVE_NOISE = 1e-3
+
 # instance_set = "indset"
-# LEARNING_RATE = 1e-4
+# LEARNING_RATE = 1e-3
 # TARGET_NOISE = 1e-4
 # OBJECTIVE_NOISE = 1e-3
 
 instance_set = "facilities"
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 TARGET_NOISE = 1e-4
 OBJECTIVE_NOISE = 1e-3
 
 # Two-layer learning rates:
 # Setcover: 1e-3
 # Cauctions: 1e-3
-# Indset: 1e-4
-# Facilities: 1e-4
+# Indset: 1e-3
+# Facilities: 1e-3
+# Indset-old: 1e-4
+# Facilities-old: 1e-4
 
 # One-layer learning rates:
 # Setcover: 1e-3
@@ -155,7 +172,7 @@ OBJECTIVE_NOISE = 1e-3
 
 
 instance_folder = Path(f"data/instances/{instance_set}/train")
-save_folder = Path(f"data/andrea-experiment-mixed/{instance_set}")
+save_folder = Path(f"data/ipco/{instance_set}")
 
 logging.basicConfig(
     format='[%(asctime)s %(levelname)-7s]  %(threadName)-23s  |  %(message)s',

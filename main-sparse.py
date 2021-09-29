@@ -33,13 +33,15 @@ def solve_instance(instance_path, save_folder, seed, gomory_initialization):
         torch.manual_seed(seed)
 
         A, b, c, vtypes = load_instance(str(instance_path), device="cpu", add_variable_bounds=False, presolve=True)
-        optimal_value, optimal_solution = solve_ilp(A, b, c, vtypes)
+        _, optimal_solution = solve_ilp(A, b, c, vtypes)
         
         if OBJECTIVE_NOISE > 0:
             c = perturb_objective(A, b, c, vtypes, optimal_solution)
+        optimal_value = optimal_solution@c
         
         gomory_bounds = compute_gomory_bounds(A, b, c, vtypes, nb_rounds=2)
         lp_value = gomory_bounds[0]
+        assert (lp_value <= gomory_bounds[-1]) and (gomory_bounds[-1] <= optimal_value)
         info = {"instance_path": instance_path.name, "seed": seed,
                 "problem_shape": np.array(A.shape), "gomory_initialization": gomory_initialization,
                 "optimal_value": optimal_value.item(),  "lp_optimal_value": lp_value, 
@@ -144,21 +146,33 @@ NB_INSTANCES = 100
 NB_ITERATIONS = 10000
 DEVICE = "cuda"
 
+# instance_set = "setcover"
+# LEARNING_RATE = 1e-3
+# TARGET_NOISE = 1e-4
+# OBJECTIVE_NOISE = 1e-3
+
+# instance_set = "cauctions"
+# LEARNING_RATE = 1e-3
+# TARGET_NOISE = 1e-4
+# OBJECTIVE_NOISE = 1e-3
+
 # instance_set = "indset"
-# LEARNING_RATE = 1e-4
+# LEARNING_RATE = 1e-3
 # TARGET_NOISE = 1e-4
 # OBJECTIVE_NOISE = 1e-3
 
 instance_set = "facilities"
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 TARGET_NOISE = 1e-4
 OBJECTIVE_NOISE = 1e-3
 
 # Two-layer learning rates:
 # Setcover: 1e-3
 # Cauctions: 1e-3
-# Indset: 1e-4
-# Facilities: 1e-4
+# Indset: 1e-3
+# Facilities: 1e-3
+# Indset-old: 1e-4
+# Facilities-old: 1e-4
 
 # One-layer learning rates:
 # Setcover: 1e-3
@@ -168,7 +182,7 @@ OBJECTIVE_NOISE = 1e-3
 
 
 instance_folder = Path(f"data/instances/{instance_set}/train")
-save_folder = Path(f"data/andrea-experiment-mixed/{instance_set}")
+save_folder = Path(f"data/ipco/{instance_set}")
 
 logging.basicConfig(
     format='[%(asctime)s %(levelname)-7s]  %(threadName)-23s  |  %(message)s',
@@ -184,4 +198,3 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
                                in product(instances, [0], [True, False])]
     concurrent.futures.wait(futures)
     logging.info(f"Done")
-torch.Size([9831, 19931])
