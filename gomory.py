@@ -24,9 +24,10 @@ def compute_gomory_round(A, b, c, vtypes, primal_solution, basis, nb_cuts=None):
     continuous_A = layer.upper(A[:, cont_vars])
     layer_A = torch.cat([integral_A, continuous_A], dim=-1)
     gaps = layer_A@primal_solution - torch.ones_like(u)
-    cut_indices = (gaps < 0).nonzero().squeeze(-1)
-    if nb_cuts is not None:
-        cut_indices = cut_indices[gaps[cut_indices].topk(min(len(cut_indices), nb_cuts), largest=False).indices]
+    if nb_cuts is None:
+        cut_indices = (gaps < 0).nonzero().squeeze(-1)
+    else:
+        cut_indices = gaps.topk(nb_cuts, largest=False).indices
     layer.out_size = len(cut_indices)
     layer.M.data = layer.M.data[cut_indices, :]
     layer.v.data = layer.v.data[cut_indices]

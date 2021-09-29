@@ -69,17 +69,36 @@ def train_subadditive(A, b, c, vtypes, info, gomory_initialization):
         gomory_initialization_(dual_function, A, b, c, vtypes)
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=LEARNING_RATE)
 
-    A = A.to(device)
-    b = b.to(device)
-    c = c.to(device)
+    if SPARSE_TENSORS:
+        integral_vars = np.isin(vtypes, [GRB.BINARY, GRB.INTEGER])
+        continuous_vars = np.isin(vtypes, [GRB.CONTINUOUS])
+        integral_A = A[:, integral_vars].to_sparse().to(device)
+        continuous_A = A[:, continuous_vars].to_sparse().to(device)
+        b = b.to(device)
+        integral_c = c[integral_vars].to(device)
+        continuous_c = c[continuous_vars].to(device)
+    else:
+        A = A.to(device)
+        b = b.to(device)
+        c = c.to(device)
         
     best_bound, best_bounds = -np.inf, []
     target, basis_start = None, None
 
     for step in range(NB_ITERATIONS):
-        loss_A, loss_b, loss_c, loss_vtypes = A, b, c, vtypes
-        for layer in dual_function.inner_layers:
-            loss_A, loss_b, loss_c, loss_vtypes = get_extended_lp(loss_A, loss_b, loss_c, loss_vtypes, layer)
+        if SPARSE_TENSORS:
+            loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes = \
+                integral_A, continuous_A, b, integral_c, continuous_c, vtypes
+            for layer in dual_function.inner_layers:
+                loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes = \
+                    get_sparse_extended_lp(loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes, layer)
+            loss_A = sparse_cat(loss_integral_A.cpu(), loss_continuous_A.cpu(), 1).to_dense()
+            loss_b = loss_b.cpu()
+            loss_c = torch.cat([loss_integral_c.cpu(), loss_continuous_c.cpu()])
+        else:
+            loss_A, loss_b, loss_c, loss_vtypes = A, b, c, vtypes
+            for layer in dual_function.inner_layers:
+                loss_A, loss_b, loss_c, loss_vtypes = get_extended_lp(loss_A, loss_b, loss_c, loss_vtypes, layer)
         
         cut_gap = -np.inf if target is None else get_gaps(A.shape, loss_A, loss_b, target, dual_function.inner_layers).min()
         if cut_gap < 0:
@@ -135,6 +154,7 @@ NB_WORKERS = 14
 NB_INSTANCES = 100
 NB_ITERATIONS = 10000
 DEVICE = "cuda"
+SPARSE_TENSORS = True
 
 # instance_set = "setcover"
 # LEARNING_RATE = 1e-3
@@ -180,6 +200,11 @@ logging.basicConfig(
 
 save_folder.mkdir(exist_ok=True, parents=True)
 instances = list(instance_folder.glob("*.lp"))[:NB_INSTANCES]
+
+if SPARSE_TENSORS:
+    GomoryLayer = SparseGomoryLayer
+    Cat = SparseCat
+
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
     logging.info(f"Solving {instance_folder}")
