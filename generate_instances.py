@@ -25,6 +25,6 @@ instances = ecole.instance.IndependentSetGenerator(n_nodes=300)
 folder = Path("data/instances/indset")
 create_instances(instances, folder)
 
-instances = ecole.instance.CapacitatedFacilityLocationGenerator(n_customers=20, n_facilities=20)
+instances = ecole.instance.CapacitatedFacilityLocationGenerator(n_customers=20, n_facilities=10, continuous_assignment=False)
 folder = Path("data/instances/facilities")
 create_instances(instances, folder)

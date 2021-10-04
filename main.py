@@ -1,3 +1,4 @@
+import argparse
 import logging
 import concurrent.futures
 import pickle
@@ -14,20 +15,20 @@ from gomory import *
 
 
 class DualFunction(torch.nn.Module):
-    def __init__(self, input_size):
+    def __init__(self, input_size, nb_layers):
         super().__init__()
         self.inner_layers = SequentialSubadditive(
-            Cat(GomoryLayer(input_size, 32)),
-            Cat(GomoryLayer(input_size+32, 32)),
+            *[Cat(GomoryLayer(input_size + 32*layer, 32)) 
+             for layer in range(nb_layers)]
         )
-        self.final_layer = LinearLayer(input_size+32+32, 1)
+        self.final_layer = LinearLayer(input_size+32*nb_layers, 1)
     
     def forward(self, bias):
         hidden = self.inner_layers(bias)
         return self.final_layer(hidden).squeeze(0)
 
 
-def solve_instance(instance_path, save_folder, seed, gomory_initialization):
+def solve_instance(instance_path, save_folder, nb_layers, seed, gomory_initialization):
     try:
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -39,21 +40,21 @@ def solve_instance(instance_path, save_folder, seed, gomory_initialization):
             c = perturb_objective(A, b, c, vtypes, optimal_solution)
         optimal_value = optimal_solution@c
         
-        gomory_bounds = compute_gomory_bounds(A, b, c, vtypes, nb_rounds=2)
+        gomory_bounds = compute_gomory_bounds(A, b, c, vtypes, nb_rounds=nb_layers)
         lp_value = gomory_bounds[0]
-        info = {"instance_path": instance_path.name, "seed": seed,
+        info = {"instance_path": instance_path.name, "nb_layers": nb_layers, "seed": seed,
                 "problem_shape": np.array(A.shape), "gomory_initialization": gomory_initialization,
                 "optimal_value": optimal_value.item(),  "lp_optimal_value": lp_value, 
-                "gomory": gomory_bounds[2]}
+                "gomory": gomory_bounds[-1]}
 
         if lp_value == optimal_value:
             logging.warning(f"Instance {instance_path} was solved in presolving (LP=ILP value), skipping")
         else:
-            nn_best_bounds = train_subadditive(A, b, c, vtypes, info, gomory_initialization)
+            nn_best_bounds = train_subadditive(A, b, c, vtypes, info, nb_layers, gomory_initialization)
             info["nn_best_bounds"] = np.array(nn_best_bounds)
 
             save_folder.mkdir(parents=True, exist_ok=True)
-            save_file = f"{instance_path.stem}_{seed}_{'g' if gomory_initialization else 'r'}.pkl"
+            save_file = f"{instance_path.stem}_{nb_layers}_{seed}_{'g' if gomory_initialization else 'r'}.pkl"
             with (save_folder/save_file).open("wb") as file:
                 pickle.dump(info, file)
 
@@ -62,43 +63,18 @@ def solve_instance(instance_path, save_folder, seed, gomory_initialization):
         raise e
 
 
-def train_subadditive(A, b, c, vtypes, info, gomory_initialization):
-    device = A.device
-    dual_function = DualFunction(input_size=len(b)).to(device)
+def train_subadditive(A, b, c, vtypes, info, nb_layers, gomory_initialization):
+    problem_description = get_problem_description(A, b, c, vtypes, DEVICE, sparse=USE_SPARSE_TENSORS)
+    dual_function = DualFunction(input_size=len(b), nb_layers=nb_layers)
     if gomory_initialization:
         gomory_initialization_(dual_function, A, b, c, vtypes)
+    dual_function = dual_function.to(DEVICE)
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=LEARNING_RATE)
-
-    if SPARSE_TENSORS:
-        integral_vars = np.isin(vtypes, [GRB.BINARY, GRB.INTEGER])
-        continuous_vars = np.isin(vtypes, [GRB.CONTINUOUS])
-        integral_A = A[:, integral_vars].to_sparse().to(device)
-        continuous_A = A[:, continuous_vars].to_sparse().to(device)
-        b = b.to(device)
-        integral_c = c[integral_vars].to(device)
-        continuous_c = c[continuous_vars].to(device)
-    else:
-        A = A.to(device)
-        b = b.to(device)
-        c = c.to(device)
-        
+    
     best_bound, best_bounds = -np.inf, []
     target, basis_start = None, None
-
     for step in range(NB_ITERATIONS):
-        if SPARSE_TENSORS:
-            loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes = \
-                integral_A, continuous_A, b, integral_c, continuous_c, vtypes
-            for layer in dual_function.inner_layers:
-                loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes = \
-                    get_sparse_extended_lp(loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes, layer)
-            loss_A = sparse_cat(loss_integral_A.cpu(), loss_continuous_A.cpu(), 1).to_dense()
-            loss_b = loss_b.cpu()
-            loss_c = torch.cat([loss_integral_c.cpu(), loss_continuous_c.cpu()])
-        else:
-            loss_A, loss_b, loss_c, loss_vtypes = A, b, c, vtypes
-            for layer in dual_function.inner_layers:
-                loss_A, loss_b, loss_c, loss_vtypes = get_extended_lp(loss_A, loss_b, loss_c, loss_vtypes, layer)
+        loss_A, loss_b, loss_c, loss_vtypes = get_extended_problem_description(problem_description, dual_function, sparse=USE_SPARSE_TENSORS)
         
         cut_gap = -np.inf if target is None else get_gaps(A.shape, loss_A, loss_b, target, dual_function.inner_layers).min()
         if cut_gap < 0:
@@ -113,15 +89,45 @@ def train_subadditive(A, b, c, vtypes, info, gomory_initialization):
         if step % (NB_ITERATIONS//40) == 0:
             gap = (info['optimal_value']-best_bounds[-1])/(info['optimal_value'] - info['lp_optimal_value'])
             gomory_gap = (info['optimal_value']-info['gomory'])/(info['optimal_value'] - info['lp_optimal_value'])
-            logging.info(f"Iteration {step: >5}/{NB_ITERATIONS: <5} [{info['instance_path']: <15} / seed {info['seed']} / Gomory {str(gomory_initialization): >5}]"
-                f" | NN gap {100*gap: >6.2f}%, Gomory gap  {100*gomory_gap: >6.2f}% [gain {100*(gomory_gap-gap): >6.2f}%]"
-                f", cut gap {cut_gap: >10.6f}")
+            logging.info(f"Iteration {step: >5}/{NB_ITERATIONS: <5} [{info['instance_path']: <15}"
+                         f" / {nb_layers} layer(s) / seed {info['seed']} / Gomory {str(gomory_initialization): >5}]"
+                         f" | NN gap {100*gap: >6.2f}%, Gomory gap  {100*gomory_gap: >6.2f}% [gain {100*(gomory_gap-gap): >6.2f}%]"
+                         f", cut gap {cut_gap: >10.6f}")
         
         optimizer.zero_grad()
         loss.mean().backward()
         optimizer.step()
 
     return best_bounds
+
+
+def get_problem_description(A, b, c, vtypes, device, sparse):
+    if sparse:
+        integral_vars = np.isin(vtypes, [GRB.BINARY, GRB.INTEGER])
+        continuous_vars = np.isin(vtypes, [GRB.CONTINUOUS])
+        integral_A = A[:, integral_vars].to_sparse().to(device)
+        continuous_A = A[:, continuous_vars].to_sparse().to(device)
+        b = b.to(device)
+        integral_c = c[integral_vars].to(device)
+        continuous_c = c[continuous_vars].to(device)
+        return integral_A, continuous_A, b, integral_c, continuous_c, vtypes
+    else:
+        return A.to(device), b.to(device), c.to(device)
+
+
+def get_extended_problem_description(problem_description, dual_function, sparse):
+    if sparse:
+        for layer in dual_function.inner_layers:
+            problem_description = get_sparse_extended_lp(*problem_description, layer)
+        loss_integral_A, loss_continuous_A, loss_b, loss_integral_c, loss_continuous_c, loss_vtypes = problem_description
+        loss_A = sparse_cat(loss_integral_A.cpu(), loss_continuous_A.cpu(), 1).to_dense()
+        loss_b = loss_b.cpu()
+        loss_c = torch.cat([loss_integral_c.cpu(), loss_continuous_c.cpu()])
+    else:
+        for layer in dual_function.inner_layers:
+            problem_description = get_extended_lp(*problem_description, layer)
+        loss_A, loss_b, loss_c, loss_vtypes = problem_description
+    return loss_A, loss_b, loss_c, loss_vtypes
 
 
 def get_gaps(A_shape, loss_A, loss_b, target, layers):
@@ -150,66 +156,84 @@ def perturb_objective(A, b, c, vtypes, optimal_solution):
 
 # Main code
 
-NB_WORKERS = 14
-NB_INSTANCES = 100
-NB_ITERATIONS = 10000
-DEVICE = "cuda"
-SPARSE_TENSORS = True
 
-# instance_set = "setcover"
-# LEARNING_RATE = 1e-3
-# TARGET_NOISE = 1e-4
-# OBJECTIVE_NOISE = 1e-3
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'problem',
+        help='MILP instance type to process.',
+        choices=['setcover', 'cauctions', 'facilities', 'indset'],
+    )
+    parser.add_argument(
+        '-s', '--seed',
+        help='Random generator seed.',
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        '-j', '--njobs',
+        help='Number of parallel jobs.',
+        type=int,
+        default=14,
+    )
+    parser.add_argument(
+        '-g', '--gpu',
+        help='CUDA GPU id (-1 for CPU).',
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        '--dense',
+        help='Should dense tensors be used?',
+        default=False,
+    )
+    args = parser.parse_args()
+    
+    NB_WORKERS = args.njobs
+    NB_INSTANCES = 100
+    NB_ITERATIONS = 10000
+    DEVICE = f"cuda:{args.gpu}" if args.gpu >= 0 else "cpu"
+    USE_SPARSE_TENSORS = not args.dense
+    
+    # Two-layer learning rates:
+    # Setcover: 1e-3
+    # Cauctions: 1e-3
+    # Indset: 1e-3
+    # Facilities: 1e-3
+    # Indset-old: 1e-4
+    # Facilities-old: 1e-4
 
-# instance_set = "cauctions"
-# LEARNING_RATE = 1e-3
-# TARGET_NOISE = 1e-4
-# OBJECTIVE_NOISE = 1e-3
+    # One-layer learning rates:
+    # Setcover: 1e-3
+    # Cauctions: 1e-3
+    # Indset: 1e-4
+    # Facilities: 5e-4
 
-# instance_set = "indset"
-# LEARNING_RATE = 1e-3
-# TARGET_NOISE = 1e-4
-# OBJECTIVE_NOISE = 1e-3
+    NB_LAYERS = 1
+    LEARNING_RATE = 1e-3
+    TARGET_NOISE = 1e-4
+    OBJECTIVE_NOISE = 1e-3
+    
+    # ----------------------------------------------------------------------------
+    
+    instance_folder = Path(f"data/instances/{args.problem}/train")
+    save_folder = Path(f"data/ipco/{args.problem}")
 
-instance_set = "facilities"
-LEARNING_RATE = 1e-3
-TARGET_NOISE = 1e-4
-OBJECTIVE_NOISE = 1e-3
+    logging.basicConfig(
+        format='[%(asctime)s %(levelname)-7s]  %(threadName)-23s  |  %(message)s',
+        level=logging.INFO, datefmt='%H:%M:%S')
 
-# Two-layer learning rates:
-# Setcover: 1e-3
-# Cauctions: 1e-3
-# Indset: 1e-3
-# Facilities: 1e-3
-# Indset-old: 1e-4
-# Facilities-old: 1e-4
+    save_folder.mkdir(exist_ok=True, parents=True)
+    instances = list(instance_folder.glob("*.lp"))[:NB_INSTANCES]
 
-# One-layer learning rates:
-# Setcover: 1e-3
-# Cauctions: 1e-3
-# Indset: 1e-4
-# Facilities: 5e-4
+    if USE_SPARSE_TENSORS:
+        GomoryLayer = SparseGomoryLayer
+        Cat = SparseCat
 
-
-instance_folder = Path(f"data/instances/{instance_set}/train")
-save_folder = Path(f"data/ipco/{instance_set}")
-
-logging.basicConfig(
-    format='[%(asctime)s %(levelname)-7s]  %(threadName)-23s  |  %(message)s',
-    level=logging.INFO, datefmt='%H:%M:%S')
-
-save_folder.mkdir(exist_ok=True, parents=True)
-instances = list(instance_folder.glob("*.lp"))[:NB_INSTANCES]
-
-if SPARSE_TENSORS:
-    GomoryLayer = SparseGomoryLayer
-    Cat = SparseCat
-
-
-with concurrent.futures.ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
-    logging.info(f"Solving {instance_folder}")
-    futures = [executor.submit(solve_instance, instance_path, save_folder, seed, gomory_init)
-                               for instance_path, seed, gomory_init 
-                               in product(instances, [0], [True, False])]
-    concurrent.futures.wait(futures)
-    logging.info(f"Done")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=NB_WORKERS) as executor:
+        logging.info(f"Solving {instance_folder}")
+        futures = [executor.submit(solve_instance, instance_path, save_folder, nb_layers, seed, gomory_init)
+                                   for instance_path, nb_layers, seed, gomory_init 
+                                   in product(instances, [NB_LAYERS], [args.seed], [True, False])]
+        concurrent.futures.wait(futures)
+        logging.info(f"Done")

@@ -9,7 +9,7 @@ def compute_gomory_round(A, b, c, vtypes, primal_solution, basis, nb_cuts=None):
     u = frac(M@b)
 
     # Remove cuts with zero u (integer l.h.s.)
-    cut_indices = (u > 1e-8)
+    cut_indices = (u > 1e-7) & (u < 1-1e-7)
     M = M[cut_indices, :]
     u = u[cut_indices]
 
@@ -27,7 +27,7 @@ def compute_gomory_round(A, b, c, vtypes, primal_solution, basis, nb_cuts=None):
     if nb_cuts is None:
         cut_indices = (gaps < 0).nonzero().squeeze(-1)
     else:
-        cut_indices = gaps.topk(nb_cuts, largest=False).indices
+        cut_indices = gaps.topk(min(len(gaps), nb_cuts), largest=False).indices
     layer.out_size = len(cut_indices)
     layer.M.data = layer.M.data[cut_indices, :]
     layer.v.data = layer.v.data[cut_indices]
