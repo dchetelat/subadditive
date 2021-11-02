@@ -33,7 +33,7 @@ def solve_instance(instance_path, save_folder, nb_layers, seed, gomory_initializ
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        A, b, c, vtypes = load_instance(str(instance_path), device="cpu", add_variable_bounds=False, presolve=True)
+        A, b, c, vtypes = load_instance(str(instance_path), device="cpu", add_variable_bounds=ADD_VARIABLE_BOUNDS, presolve=True)
         _, optimal_solution = solve_ilp(A, b, c, vtypes)
         
         if OBJECTIVE_NOISE > 0:
@@ -42,6 +42,7 @@ def solve_instance(instance_path, save_folder, nb_layers, seed, gomory_initializ
         
         gomory_bounds = compute_gomory_bounds(A, b, c, vtypes, nb_rounds=nb_layers)
         lp_value = gomory_bounds[0]
+        
         info = {"instance_path": instance_path.name, "nb_layers": nb_layers, "seed": seed,
                 "problem_shape": np.array(A.shape), "gomory_initialization": gomory_initialization,
                 "optimal_value": optimal_value.item(),  "lp_optimal_value": lp_value, 
@@ -162,7 +163,7 @@ if __name__ == '__main__':
     parser.add_argument(
         'problem',
         help='MILP instance type to process.',
-        choices=['setcover', 'cauctions', 'facilities', 'indset'],
+        choices=['setcover', 'cauctions', 'facilities', 'indset', '2-matching'],
     )
     parser.add_argument(
         '-s', '--seed',
@@ -174,7 +175,7 @@ if __name__ == '__main__':
         '-j', '--njobs',
         help='Number of parallel jobs.',
         type=int,
-        default=14,
+        default=12,
     )
     parser.add_argument(
         '-g', '--gpu',
@@ -191,7 +192,7 @@ if __name__ == '__main__':
     
     NB_WORKERS = args.njobs
     NB_INSTANCES = 100
-    NB_ITERATIONS = 10000
+    NB_ITERATIONS = 100000
     DEVICE = f"cuda:{args.gpu}" if args.gpu >= 0 else "cpu"
     USE_SPARSE_TENSORS = not args.dense
     
@@ -209,14 +210,15 @@ if __name__ == '__main__':
     # Indset: 1e-4
     # Facilities: 5e-4
 
-    NB_LAYERS = 1
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 1e-4
     TARGET_NOISE = 1e-4
     OBJECTIVE_NOISE = 1e-3
+    ADD_VARIABLE_BOUNDS = True
     
     # ----------------------------------------------------------------------------
     
-    instance_folder = Path(f"data/instances/{args.problem}/train")
+#     instance_folder = Path(f"data/instances/{args.problem}/train")
+    instance_folder = Path(f"data/instances/{args.problem}")
     save_folder = Path(f"data/ipco/{args.problem}")
 
     logging.basicConfig(
@@ -234,6 +236,6 @@ if __name__ == '__main__':
         logging.info(f"Solving {instance_folder}")
         futures = [executor.submit(solve_instance, instance_path, save_folder, nb_layers, seed, gomory_init)
                                    for instance_path, nb_layers, seed, gomory_init 
-                                   in product(instances, [NB_LAYERS], [args.seed], [True, False])]
+                                   in product(instances, [1, 2], [args.seed], [True, False])]
         concurrent.futures.wait(futures)
         logging.info(f"Done")

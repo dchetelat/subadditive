@@ -57,10 +57,18 @@ def compute_gomory_bounds(A, b, c, vtypes, nb_rounds):
 def gomory_initialization_(dual_function, A, b, c, vtypes):
     optimal_value, primal_solution, basis = solve_lp(A, b, c)
     basis = get_basis(A, *basis)
-    gomory_info = (A, b, c, vtypes, primal_solution, basis)
+    
+    gomory_info = (A, b, c, vtypes)
+    gomory_solution, gomory_basis = primal_solution, basis
 
     for layer in dual_function.inner_layers:
-        _, gomory_weight, gomory_scale, gomory_info = compute_gomory_round(*gomory_info, nb_cuts=layer.layer.M.shape[0])
+        _, gomory_weight, gomory_scale, _ = compute_gomory_round(*gomory_info, gomory_solution, gomory_basis, nb_cuts=layer.layer.M.shape[0])
         if gomory_weight.shape[0] > 0:
             layer.layer.M.data[:gomory_weight.shape[0], :] = gomory_weight.clone().to(layer.layer.M.device)
-        layer.layer.v.data = gomory_scale.clone().to(layer.layer.v.device)
+            layer.layer.v.data[:gomory_weight.shape[0]] = gomory_scale.clone().to(layer.layer.v.device)
+
+        extended_A, extended_b, extended_c, extended_vtypes = get_extended_lp(*gomory_info, layer)
+        _, extended_primal_solution, extended_basis = solve_lp(extended_A, extended_b, extended_c)
+        extended_basis = get_basis(extended_A, *extended_basis)
+        gomory_info = extended_A, extended_b, extended_c, extended_vtypes
+        gomory_solution, gomory_basis = extended_primal_solution, extended_basis

@@ -4,11 +4,11 @@ from gurobipy import GRB
 import torch
 
 
-def load_instance(instance_path, device="cpu", add_variable_bounds=True, presolve=False):
+def load_instance(instance_path, device="cpu", add_variable_bounds=False, presolve=True):
     with gp.Env(empty=True) as env:
         env.setParam('OutputFlag', 0)
         env.start()
-        
+
         model = gp.read(instance_path, env=env)
         if presolve:
             model = model.presolve()
@@ -18,14 +18,11 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=True, presolv
         A, b, c = torch.zeros(m, n), torch.zeros(m), torch.zeros(n)
 
         A = torch.FloatTensor(model.getA().todense())
-
         for constraint_index, constraint in enumerate(constraints):
             b[constraint_index] = constraint.RHS
-
         for variable_index, variable in enumerate(variables):
             c[variable_index] = model.ModelSense*variable.Obj
-
-        vtypes = [variable.VType for variable in variables]
+        vtypes = np.array([variable.VType for variable in variables])
 
         # Add slack variables
         slack_A, slack_c, slack_vtypes = [], [], []
@@ -39,21 +36,38 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=True, presolv
                 slack_vtypes.append(GRB.CONTINUOUS)
         A = torch.cat([A, *slack_A], dim=-1)
         c = torch.cat([c, *slack_c])
-        vtypes += slack_vtypes
-
-        # Add variable upper bounds
+        vtypes = np.concatenate([vtypes, slack_vtypes])
+        
+        # Add variable upper bounds if desired
         if add_variable_bounds:
-            bound_A = torch.cat([torch.eye(len(variables)), 
-                                 torch.zeros(len(variables), A.shape[1]-len(variables)), 
-                                 torch.eye(len(variables))], dim=1)
-            A = torch.cat([A, torch.zeros(A.shape[0], len(variables))], dim=1)
-            A = torch.cat([A, bound_A], dim=0)
-            b = torch.cat([b, torch.FloatTensor([variable.UB for variable in variables])])
-            c = torch.cat([c, torch.zeros(len(variables))])
-            vtypes += [GRB.CONTINUOUS for _ in range(len(variables))]
-
+            upper_bounds_A, upper_bounds_b = [], []
+            for variable_index, variable in enumerate(variables):
+                if variable.UB is not None and variable.UB < np.inf:
+                    upper_bound_A = torch.zeros((1, A.shape[1]))
+                    upper_bound_A[0, variable_index] = 1
+                    upper_bounds_A.append(upper_bound_A)
+                    upper_bounds_b.append(variable.UB)
+            upper_bounds_A = torch.cat(upper_bounds_A, dim=0)
+            slack_A = torch.cat([torch.zeros((A.shape[0], upper_bounds_A.shape[0])),
+                                 torch.eye(upper_bounds_A.shape[0])], dim=0)
+            A = torch.cat([torch.cat([A, upper_bounds_A], axis=0), slack_A], dim=1)
+            b = torch.cat([b, torch.FloatTensor(upper_bounds_b)])
+            c = torch.cat([c, torch.zeros(upper_bounds_A.shape[0])])
+            vtypes = np.concatenate([vtypes, [GRB.CONTINUOUS for _ 
+                                              in range(upper_bounds_A.shape[0])]])
+        
+        # Convert lower bounds to >= 0
+        variable_index = 0
         for variable in variables:
-            assert variable.LB == 0
+            if variable.LB is None or variable_index == -np.inf:
+                print(variable_index)
+                A = np.insert(A, variable_index+1, -A[:, variable_index], axis=1)
+                c = np.insert(c, variable_index+1, -c[variable_index])
+                vtypes = np.insert(vtypes, variable_index+1, vtypes[variable_index])
+                variable_index += 1
+            elif variable.LB != 0:
+                b -= A[:, variable_index]*variables[variable_index].LB
+            variable_index += 1
 
     return A.to(device), b.to(device), c.to(device), vtypes
 
@@ -65,6 +79,7 @@ class LinearProgram(torch.autograd.Function):
     @staticmethod
     def forward(ctx, A, b, c, basis_start=None, point_start=None, verbose=False, method='simplex'):
         device = A.device
+        dtype = A.dtype
         A, b, c = A.detach().cpu().numpy(), b.detach().cpu().numpy(), c.detach().cpu().numpy()
         
         with gp.Env(empty=True) as env:
@@ -82,7 +97,7 @@ class LinearProgram(torch.autograd.Function):
             elif method == 'ipm':
                 model.params.Method = 2
                 model.params.Crossover = 0
-#                 model.params.BarConvTol = 1e-4
+#                 model.params.BarConvTol = 1e-3
             else:
                 raise Exception(f"Unrecognized LP method '{method}'")
             model.update()
@@ -95,23 +110,27 @@ class LinearProgram(torch.autograd.Function):
                 primal_start, dual_start = point_start
                 variables.PStart = primal_start.cpu().numpy()
                 constraints.DStart = dual_start.cpu().numpy()
-
+            
+#             model = model.presolve()
             model.optimize()
-
-            optimal_value = torch.FloatTensor([model.objVal]).to(device).squeeze()
-            primal_solution = torch.FloatTensor(variables.X).to(device)
-            dual_solution = torch.FloatTensor(constraints.Pi).to(device)
-            reduced_costs = torch.FloatTensor(variables.RC).to(device)
-            if method == 'simplex':
-                primal_basis = torch.LongTensor(variables.VBasis).to(device)
-                dual_basis = torch.LongTensor(constraints.CBasis).to(device)
+    
+            if model.Status == GRB.OPTIMAL:
+                optimal_value = torch.Tensor([model.objVal]).to(device=device, dtype=dtype).squeeze()
+                primal_solution = torch.Tensor(variables.X).to(device=device, dtype=dtype)
+                dual_solution = torch.Tensor(constraints.Pi).to(device=device, dtype=dtype)
+                reduced_costs = torch.Tensor(variables.RC).to(device=device, dtype=dtype)
+                if method == 'simplex':
+                    primal_basis = torch.LongTensor(variables.VBasis).to(device)
+                    dual_basis = torch.LongTensor(constraints.CBasis).to(device)
+                else:
+                    primal_basis = torch.LongTensor([]).to(device)
+                    dual_basis = torch.LongTensor([]).to(device)
+            
+                ctx.save_for_backward(primal_solution, dual_solution)
+                ctx.mark_non_differentiable(primal_solution, dual_solution, reduced_costs, primal_basis, dual_basis)
+                return optimal_value, primal_solution, dual_solution, reduced_costs, primal_basis, dual_basis
             else:
-                primal_basis = torch.LongTensor([]).to(device)
-                dual_basis = torch.LongTensor([]).to(device)
-        
-        ctx.save_for_backward(primal_solution, dual_solution)
-        ctx.mark_non_differentiable(primal_solution, dual_solution, reduced_costs, primal_basis, dual_basis)
-        return optimal_value, primal_solution, dual_solution, reduced_costs, primal_basis, dual_basis
+                return None
     
     @staticmethod
     def backward(ctx, gradient, *_):
@@ -125,13 +144,15 @@ class LinearProgram(torch.autograd.Function):
 
 def solve_lp(A, b, c, basis_start=None, point_start=None, verbose=False, method='simplex'):
     lp_solution = LinearProgram.apply(A, b, c, basis_start, point_start, verbose, method)
-    optimal_value, primal_solution, dual_solution, reduced_costs, primal_basis, dual_basis = lp_solution
-
-    return optimal_value, primal_solution, (primal_basis, dual_basis)
+    if lp_solution is not None:
+        optimal_value, primal_solution, dual_solution, reduced_costs, primal_basis, dual_basis = lp_solution
+        return optimal_value, primal_solution, (primal_basis, dual_basis)
+    else:
+        return None
 
 
 def solve_ilp(A, b, c, vtypes, verbose=False):
-    device = A.device
+    device, dtype = A.device, A.dtype
     A, b, c = A.detach().cpu().numpy(), b.detach().cpu().numpy(), c.detach().cpu().numpy()
 
     with gp.Env(empty=True) as env:
@@ -140,16 +161,18 @@ def solve_ilp(A, b, c, vtypes, verbose=False):
         env.start()
         
         model = gp.Model(env=env)
-        variables = model.addMVar(shape=len(c), vtype=vtypes)
+        variables = model.addMVar(shape=len(c), vtype=vtypes.tolist())
         model.setObjective(c @ variables, GRB.MINIMIZE)
         constraints = model.addConstr(A @ variables == b)
         model.update()
 
         model.optimize()
-        optimal_value = torch.FloatTensor([model.objVal]).to(device).squeeze()
-        optimal_solution = torch.FloatTensor(variables.X).to(device)
-    
-    return optimal_value, optimal_solution
+        if model.Status == GRB.OPTIMAL:
+            optimal_value = torch.Tensor([model.objVal]).to(device=device, dtype=dtype).squeeze()
+            optimal_solution = torch.Tensor(variables.X).to(device=device, dtype=dtype)
+            return optimal_value, optimal_solution
+        else:
+            return None
 
 
 def solve_lp_from_path(instance_path, verbose=False):

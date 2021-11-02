@@ -27,15 +27,16 @@ class GomoryLayer(SubadditiveLayer):
         super().__init__()
         self.M = torch.nn.Parameter(torch.Tensor(out_size, in_size))
         self.v = torch.nn.Parameter(torch.Tensor(out_size))
-        torch.nn.init.orthogonal_(self.M)
-        torch.nn.init.normal_(self.v)
+        if out_size > 0:
+            torch.nn.init.orthogonal_(self.M, gain=0.1)
+            torch.nn.init.normal_(self.v)
         
         self.in_size = in_size
         self.out_size = out_size
         
     def forward(self, input_):
         hidden = frac(self.M@input_)
-        scale = self.v.sigmoid() + 1e-8
+        scale = self.v.sigmoid()
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
         
@@ -44,7 +45,7 @@ class GomoryLayer(SubadditiveLayer):
     
     def upper(self, input_):
         hidden = self.M@input_
-        scale = self.v.sigmoid() + 1e-8
+        scale = self.v.sigmoid()
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
         
@@ -72,8 +73,8 @@ class SparseGomoryLayer(SubadditiveLayer):
         if input_.is_sparse:
             hidden = frac(torch.sparse.mm(input_.t(), self.M.t())).t()
         else:
-            hidden = self.M@input_
-        scale = self.v.sigmoid() + 1e-8
+            hidden = frac(self.M@input_)
+        scale = self.v.sigmoid()
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
         
@@ -85,7 +86,7 @@ class SparseGomoryLayer(SubadditiveLayer):
             hidden = torch.sparse.mm(input_.t(), self.M.t()).t()
         else:
             hidden = self.M@input_
-        scale = self.v.sigmoid() + 1e-8
+        scale = self.v.sigmoid()
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
         
@@ -208,7 +209,7 @@ def get_extended_lp(A, b, c, vtypes, layer):
     extended_A = torch.cat([integral_A, continuous_A, slack_A], axis=1)
     extended_b = layer(b)
     extended_c = torch.cat([c, torch.zeros(slack_A.shape[1], device=device)], dim=0)
-    extended_vtypes = vtypes + [GRB.CONTINUOUS for _ in range(slack_A.shape[1])]
+    extended_vtypes = np.concatenate([vtypes, [GRB.CONTINUOUS for _ in range(slack_A.shape[1])]])
     
     return extended_A, extended_b, extended_c, extended_vtypes
 
@@ -224,6 +225,6 @@ def get_sparse_extended_lp(integral_A, continuous_A, b, integral_c, continuous_c
     extended_b = layer(b)
     extended_integral_c = integral_c
     extended_continuous_c = torch.cat([continuous_c, torch.zeros(slack_A.shape[1], device=device)], dim=0)
-    extended_vtypes = vtypes + [GRB.CONTINUOUS for _ in range(slack_A.shape[1])]
+    extended_vtypes = np.concatenate([vtypes, [GRB.CONTINUOUS for _ in range(slack_A.shape[1])]])
 
     return extended_integral_A, extended_continuous_A, extended_b, extended_integral_c, extended_continuous_c, extended_vtypes
