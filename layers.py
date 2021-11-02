@@ -37,10 +37,12 @@ class GomoryLayer(SubadditiveLayer):
     def forward(self, input_):
         hidden = frac(self.M@input_)
         scale = self.v.sigmoid()
+        scale_cmp = 1/(1+self.v.exp())
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
+            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
-        output = torch.min(hidden/scale, (1-hidden)/(1-scale))
+        output = torch.min(hidden/scale, (1-hidden)/scale_cmp)
         return output
     
     def upper(self, input_):
@@ -208,7 +210,8 @@ def get_extended_lp(A, b, c, vtypes, layer):
     slack_A = -torch.eye(layer.out_size, device=device)[:, layer.needs_bounding()]
     extended_A = torch.cat([integral_A, continuous_A, slack_A], axis=1)
     extended_b = layer(b)
-    extended_c = torch.cat([c, torch.zeros(slack_A.shape[1], device=device)], dim=0)
+    extended_c = torch.cat([c[integral_vars], c[continuous_vars], 
+                            torch.zeros(slack_A.shape[1], device=device)], dim=0)
     extended_vtypes = np.concatenate([vtypes, [GRB.CONTINUOUS for _ in range(slack_A.shape[1])]])
     
     return extended_A, extended_b, extended_c, extended_vtypes

@@ -57,19 +57,19 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
                                               in range(upper_bounds_A.shape[0])]])
         
         # Convert lower bounds to >= 0
-        variable_index = 0
+        variable_index, objective_offset = 0, torch.zeros(1)
         for variable in variables:
-            if variable.LB is None or variable_index == -np.inf:
-                print(variable_index)
+            if variable.LB is None or variable.LB == -np.inf:
                 A = np.insert(A, variable_index+1, -A[:, variable_index], axis=1)
                 c = np.insert(c, variable_index+1, -c[variable_index])
                 vtypes = np.insert(vtypes, variable_index+1, vtypes[variable_index])
                 variable_index += 1
             elif variable.LB != 0:
                 b -= A[:, variable_index]*variables[variable_index].LB
+                objective_offset += c[variable_index]*variables[variable_index].LB
             variable_index += 1
 
-    return A.to(device), b.to(device), c.to(device), vtypes
+    return A.to(device), b.to(device), c.to(device), vtypes, objective_offset
 
 
 class LinearProgram(torch.autograd.Function):
