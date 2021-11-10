@@ -1,3 +1,3 @@
-# Deep dual combinatorial optimization
+# Continuous cutting plane algorithms
 
-Deep dual combinatorial optimization using subadditive neural networks.
+Implementation of a continuous cutting plane algorithm for GMI inequalities using Gurobi and Pytorch.
