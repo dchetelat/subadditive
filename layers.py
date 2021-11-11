@@ -48,11 +48,13 @@ class GomoryLayer(SubadditiveLayer):
     def upper(self, input_):
         hidden = self.M@input_
         scale = self.v.sigmoid()
+        scale_cmp = 1/(1+self.v.exp())
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
+            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
         output = torch.zeros_like(hidden)
-        output[hidden < 0] = (-hidden/(1-scale))[hidden < 0]
+        output[hidden < 0] = (-hidden/scale_cmp)[hidden < 0]
         output[hidden > 0] = (hidden/scale)[hidden > 0]
         return output
     
@@ -77,10 +79,12 @@ class SparseGomoryLayer(SubadditiveLayer):
         else:
             hidden = frac(self.M@input_)
         scale = self.v.sigmoid()
+        scale_cmp = 1/(1+self.v.exp())
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
+            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
-        output = torch.min(hidden/scale, (1-hidden)/(1-scale))
+        output = torch.min(hidden/scale, (1-hidden)/scale_cmp)
         return output.to_sparse()if input_.is_sparse else output
         
     def upper(self, input_):
@@ -89,11 +93,13 @@ class SparseGomoryLayer(SubadditiveLayer):
         else:
             hidden = self.M@input_
         scale = self.v.sigmoid()
+        scale_cmp = 1/(1+self.v.exp())
         if hidden.dim() == 2:
             scale = scale.unsqueeze(-1).expand(hidden.shape)
+            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
         output = torch.zeros_like(hidden)
-        output[hidden < 0] = (-hidden/(1-scale))[hidden < 0]
+        output[hidden < 0] = (-hidden/scale_cmp)[hidden < 0]
         output[hidden > 0] = (hidden/scale)[hidden > 0]
         return output.to_sparse()if input_.is_sparse else output
     

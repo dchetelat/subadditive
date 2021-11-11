@@ -40,21 +40,28 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
         
         # Add variable upper bounds if desired
         if add_variable_bounds:
-            upper_bounds_A, upper_bounds_b = [], []
+            upper_bounds_A, upper_bounds_b, upper_bounds_slack = [], [], []
             for variable_index, variable in enumerate(variables):
                 if variable.UB is not None and variable.UB < np.inf:
                     upper_bound_A = torch.zeros((1, A.shape[1]))
                     upper_bound_A[0, variable_index] = 1
                     upper_bounds_A.append(upper_bound_A)
-                    upper_bounds_b.append(variable.UB)
+                    if variable.VType == GRB.BINARY:
+                        upper_bounds_b.append(1)
+                        upper_bounds_slack.append(GRB.BINARY)
+                    elif variable.VType == GRB.INTEGER:
+                        upper_bounds_b.append(np.floor(variable.UB))
+                        upper_bounds_slack.append(GRB.INTEGER)
+                    elif variable.VType == GRB.CONTINUOUS:
+                        upper_bounds_b.append(variable.UB)
+                        upper_bounds_slack.append(GRB.CONTINUOUS)
             upper_bounds_A = torch.cat(upper_bounds_A, dim=0)
             slack_A = torch.cat([torch.zeros((A.shape[0], upper_bounds_A.shape[0])),
                                  torch.eye(upper_bounds_A.shape[0])], dim=0)
             A = torch.cat([torch.cat([A, upper_bounds_A], axis=0), slack_A], dim=1)
             b = torch.cat([b, torch.FloatTensor(upper_bounds_b)])
             c = torch.cat([c, torch.zeros(upper_bounds_A.shape[0])])
-            vtypes = np.concatenate([vtypes, [GRB.CONTINUOUS for _ 
-                                              in range(upper_bounds_A.shape[0])]])
+            vtypes = np.concatenate([vtypes, upper_bounds_slack])
         
         # Convert lower bounds to >= 0
         variable_index, objective_offset = 0, torch.zeros(1)
