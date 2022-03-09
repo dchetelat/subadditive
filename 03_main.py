@@ -37,25 +37,34 @@ def solve_instance(instance_path, instance_info, save_folder, nb_layers, seed, g
                                                           add_variable_bounds=instance_info["add_variable_bounds"], 
                                                           presolve=instance_info["presolve"])
         optimal_value = instance_info["optimal_value"] - objective_offset
-        
-        if OBJECTIVE_NOISE > 0:
-            _, optimal_solution = solve_ilp(A, b, c, vtypes)
-            c = perturb_objective(A, b, c, vtypes, optimal_solution)
-            optimal_value = optimal_solution@c
-        
         gomory_bounds = compute_gomory_bounds(A, b, c, vtypes, nb_rounds=nb_layers)
         lp_optimal_value = gomory_bounds[0]
         
-        info = {"instance_path": instance_path.name, "nb_layers": nb_layers, "seed": seed,
+        if OBJECTIVE_NOISE > 0:
+            _, optimal_solution = solve_ilp(A, b, c, vtypes)
+            perturbed_c = perturb_objective(A, b, c, vtypes, optimal_solution)
+            perturbed_optimal_value = optimal_solution@perturbed_c
+            perturbed_gomory_bounds = compute_gomory_bounds(A, b, perturbed_c, vtypes, nb_rounds=nb_layers)
+        else:
+            perturbed_optimal_value = optimal_value
+            perturbed_gomory_bounds = gomory_bounds
+        perturbed_lp_optimal_value = perturbed_gomory_bounds[0]
+        
+        info = {"instance_path": instance_path.name, "nb_layers": nb_layers, "seed": seed, 
                 "problem_shape": np.array(A.shape), "gomory_initialization": gomory_initialization,
-                "optimal_value": optimal_value.item(),  "lp_optimal_value": lp_optimal_value, 
-                "gomory": gomory_bounds[-1]}
+                "optimal_value": optimal_value.item(), 
+                "lp_optimal_value": lp_optimal_value, 
+                "gomory": gomory_bounds[-1],
+                "perturbed_optimal_value": perturbed_optimal_value.item(), 
+                "perturbed_lp_optimal_value": perturbed_lp_optimal_value, 
+                "perturbed_gomory": perturbed_gomory_bounds[-1]}
 
         if lp_optimal_value == optimal_value:
             logging.warning(f"Instance {instance_path} was solved in presolving (LP=ILP value), skipping")
         else:
-            nn_best_bounds = train_subadditive(A, b, c, vtypes, info, nb_layers, gomory_initialization)
+            nn_best_bounds, nn_best_perturbed_bounds = train_subadditive(A, b, c, perturbed_c, vtypes, info, nb_layers, gomory_initialization)
             info["nn_best_bounds"] = np.array(nn_best_bounds)
+            info["nn_best_perturbed_bounds"] = np.array(nn_best_perturbed_bounds)
 
             save_folder.mkdir(parents=True, exist_ok=True)
             save_file = f"{instance_path.stem}_{nb_layers}_{seed}_{'g' if gomory_initialization else 'r'}.pkl"
@@ -67,15 +76,16 @@ def solve_instance(instance_path, instance_info, save_folder, nb_layers, seed, g
         raise e
 
 
-def train_subadditive(A, b, c, vtypes, info, nb_layers, gomory_initialization):
-    problem_description = get_problem_description(A, b, c, vtypes, DEVICE, sparse=USE_SPARSE_TENSORS)
+def train_subadditive(A, b, c, perturbed_c, vtypes, info, nb_layers, gomory_initialization):
+    problem_description = get_problem_description(A, b, perturbed_c, vtypes, DEVICE, sparse=USE_SPARSE_TENSORS)
     dual_function = DualFunction(input_size=len(b), nb_layers=nb_layers)
     if gomory_initialization:
-        gomory_initialization_(dual_function, A, b, c, vtypes)
+        gomory_initialization_(dual_function, A, b, c, vtypes) # or perturbed_c?
     dual_function = dual_function.to(DEVICE)
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=LEARNING_RATE)
     
     best_bound, best_bounds = -np.inf, []
+    best_perturbed_bound, best_perturbed_bounds = -np.inf, []
     target, basis_start = None, None
     for step in range(NB_ITERATIONS):
         loss_A, loss_b, loss_c, loss_vtypes = get_extended_problem_description(problem_description, 
@@ -83,27 +93,37 @@ def train_subadditive(A, b, c, vtypes, info, nb_layers, gomory_initialization):
         
         cut_gap = -np.inf if target is None else get_gaps(A.shape, loss_A, loss_b, target, dual_function.inner_layers).min()
         if cut_gap < 0:
-            lower_bound, target, basis_start = solve_lp(loss_A, loss_b, loss_c, basis_start=basis_start)
+            lower_perturbed_bound, target, basis_start = solve_lp(loss_A, loss_b, loss_c, basis_start=basis_start)
+            lower_bound = target[:A.shape[1]]@c
             best_bound = max(lower_bound.item(), best_bound)
-        best_bounds.append(best_bound)
+            best_perturbed_bound = max(lower_perturbed_bound.item(), best_perturbed_bound)
+        best_bounds.append(best_bound), best_perturbed_bounds.append(best_perturbed_bound)
+        
+        if all(target[:A.shape[1]] == target[:A.shape[1]].long()):
+            logging.info(f"Found optimal solution of problem {info['instance_path']} with {info['nb_layers']} layer(s), early stopping")
+            break
 
         noisy_target = target + TARGET_NOISE*torch.randn_like(target)
+        noisy_target = noisy_target.relu()
         loss = loss_A[A.shape[0]:]@noisy_target - loss_b[A.shape[0]:]
         loss = -torch.linalg.solve(loss_A[A.shape[0]:, A.shape[1]:], loss.unsqueeze(-1)).squeeze(-1)
 
         if step % (NB_ITERATIONS//40) == 0:
             gap = (info['optimal_value']-best_bounds[-1])/(info['optimal_value'] - info['lp_optimal_value'])
             gomory_gap = (info['optimal_value']-info['gomory'])/(info['optimal_value'] - info['lp_optimal_value'])
-            logging.info(f"Iteration {step: >5}/{NB_ITERATIONS: <5} [{info['instance_path']: <15}"
+            logging.info(f"Iteration {step: >5}/{NB_ITERATIONS: <5} [{info['instance_path']: <16}"
                          f" / {nb_layers} layer(s) / seed {info['seed']} / Gomory {str(gomory_initialization): >5}]"
-                         f" | NN gap {100*gap: >6.2f}%, Gomory gap  {100*gomory_gap: >6.2f}% [gain {100*(gomory_gap-gap): >6.2f}%]"
+                         f" | NN gap {100*gap: >6.2f}%, Gomory gap {100*gomory_gap: >6.2f}% [gain {100*(gomory_gap-gap): >7.2f}%]"
                          f", cut gap {cut_gap: >10.6f}")
         
         optimizer.zero_grad()
         loss.mean().backward()
         optimizer.step()
+        
+    best_bounds += [best_bounds[-1] for _ in range(NB_ITERATIONS-len(best_bounds))]
+    best_perturbed_bounds += [best_perturbed_bounds[-1] for _ in range(NB_ITERATIONS-len(best_perturbed_bounds))]
 
-    return best_bounds
+    return best_bounds, best_perturbed_bounds
 
 
 def get_problem_description(A, b, c, vtypes, device, sparse):
@@ -117,7 +137,7 @@ def get_problem_description(A, b, c, vtypes, device, sparse):
         continuous_c = c[continuous_vars].to(device)
         return integral_A, continuous_A, b, integral_c, continuous_c, vtypes
     else:
-        return A.to(device), b.to(device), c.to(device)
+        return A.to(device), b.to(device), c.to(device), vtypes
 
 
 def get_extended_problem_description(problem_description, dual_function, sparse):
@@ -235,9 +255,9 @@ if __name__ == '__main__':
         NB_ITERATIONS = 10000
     elif args.problem == '2-matching':
         LEARNING_RATE = 1e-4
-        TARGET_NOISE = 1e-4
+        TARGET_NOISE = 5e-4
         OBJECTIVE_NOISE = 1e-3
-        NB_ITERATIONS = 100000
+        NB_ITERATIONS = 50000
     elif args.problem == 'small-miplib3':
         LEARNING_RATE = 1e-4
         TARGET_NOISE = 1e-4

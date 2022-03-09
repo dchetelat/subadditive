@@ -9,7 +9,7 @@ def compute_gomory_round(A, b, c, vtypes, primal_solution, basis, nb_cuts=None):
     u = frac(M@b)
 
     # Remove cuts with zero u (integer l.h.s.)
-    cut_indices = (u > 1e-7) & (u < 1-1e-7)
+    cut_indices = (u > 1e-5) & (u < 1-1e-5)
     M = M[cut_indices, :]
     u = u[cut_indices]
 

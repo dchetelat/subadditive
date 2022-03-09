@@ -33,9 +33,35 @@ def inv_softplus(x, tolerance=0):
 def frac(input_, tolerance=0):
     return input_-(input_+tolerance).floor()
 
-def triangle_wave(input_, tolerance=0):
-    output = frac(input_, tolerance)
-    return torch.min(output, 1-output)
+def expand_dims(x, y):
+    x = x.view(list(x.shape) + [1 for _ in range(y.dim()-x.dim())])
+    return x.expand(y.shape)
+
+def weighted_tri(x, scale=None, scale_cmp=None):
+    if scale is None:
+        scale = torch.FloatTensor([0.5]).squeeze().to(x.device)
+    if scale_cmp is None:
+        scale_cmp = 1 - scale
+    scale = expand_dims(scale, x)
+    scale_cmp = expand_dims(scale_cmp, x)
+
+    y = torch.zeros_like(x)
+    y[x>0] = torch.min(x.frac()/scale, (1-x.frac())/scale_cmp)[x>0]
+    y[x<0] = torch.min(x.abs().frac()/scale_cmp, (1-x.abs().frac())/scale)[x<0]
+    return y
+
+def weighted_abs(x, scale=None, scale_cmp=None):
+    if scale is None:
+        scale = torch.FloatTensor([0.5]).squeeze().to(x.device)
+    if scale_cmp is None:
+        scale_cmp = 1 - scale
+    scale = expand_dims(scale, x)
+    scale_cmp = expand_dims(scale_cmp, x)
+
+    y = torch.zeros_like(x)
+    y[x>0] = (x/scale)[x>0]
+    y[x<0] = (x.abs()/scale_cmp)[x<0]
+    return y
 
 def oneinv(x):
     y = torch.ones_like(x)

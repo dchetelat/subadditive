@@ -35,28 +35,18 @@ class GomoryLayer(SubadditiveLayer):
         self.out_size = out_size
         
     def forward(self, input_):
-        hidden = frac(self.M@input_)
+        hidden = self.M@input_
         scale = self.v.sigmoid()
         scale_cmp = 1/(1+self.v.exp())
-        if hidden.dim() == 2:
-            scale = scale.unsqueeze(-1).expand(hidden.shape)
-            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
-        output = torch.min(hidden/scale, (1-hidden)/scale_cmp)
-        return output
+        return weighted_tri(hidden, scale, scale_cmp)
     
     def upper(self, input_):
         hidden = self.M@input_
         scale = self.v.sigmoid()
         scale_cmp = 1/(1+self.v.exp())
-        if hidden.dim() == 2:
-            scale = scale.unsqueeze(-1).expand(hidden.shape)
-            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
-        output = torch.zeros_like(hidden)
-        output[hidden < 0] = (-hidden/scale_cmp)[hidden < 0]
-        output[hidden > 0] = (hidden/scale)[hidden > 0]
-        return output
+        return weighted_abs(hidden, scale, scale_cmp)
     
     def needs_bounding(self):
         return torch.BoolTensor([True for _ in range(self.out_size)])
@@ -75,17 +65,18 @@ class SparseGomoryLayer(SubadditiveLayer):
         
     def forward(self, input_):
         if input_.is_sparse:
-            hidden = frac(torch.sparse.mm(input_.t(), self.M.t())).t()
+            hidden = torch.sparse.mm(input_.t(), self.M.t()).t()
         else:
-            hidden = frac(self.M@input_)
+            hidden = self.M@input_
         scale = self.v.sigmoid()
         scale_cmp = 1/(1+self.v.exp())
-        if hidden.dim() == 2:
-            scale = scale.unsqueeze(-1).expand(hidden.shape)
-            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
+#         if hidden.dim() == 2:
+#             scale = scale.unsqueeze(-1).expand(hidden.shape)
+#             scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
-        output = torch.min(hidden/scale, (1-hidden)/scale_cmp)
-        return output.to_sparse()if input_.is_sparse else output
+#         output = torch.min(hidden/scale, (1-hidden)/scale_cmp)
+        output = weighted_tri(hidden, scale, scale_cmp)
+        return output.to_sparse() if input_.is_sparse else output
         
     def upper(self, input_):
         if input_.is_sparse:
@@ -94,14 +85,16 @@ class SparseGomoryLayer(SubadditiveLayer):
             hidden = self.M@input_
         scale = self.v.sigmoid()
         scale_cmp = 1/(1+self.v.exp())
-        if hidden.dim() == 2:
-            scale = scale.unsqueeze(-1).expand(hidden.shape)
-            scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
+#         if hidden.dim() == 2:
+#             scale = scale.unsqueeze(-1).expand(hidden.shape)
+#             scale_cmp = scale_cmp.unsqueeze(-1).expand(hidden.shape)
         
-        output = torch.zeros_like(hidden)
-        output[hidden < 0] = (-hidden/scale_cmp)[hidden < 0]
-        output[hidden > 0] = (hidden/scale)[hidden > 0]
-        return output.to_sparse()if input_.is_sparse else output
+#         output = torch.zeros_like(hidden)
+#         output[hidden < 0] = (-hidden/scale_cmp)[hidden < 0]
+#         output[hidden > 0] = (hidden/scale)[hidden > 0]
+
+        output = weighted_abs(hidden, scale, scale_cmp)
+        return output.to_sparse() if input_.is_sparse else output
     
     def needs_bounding(self):
         return torch.BoolTensor([True for _ in range(self.out_size)])
