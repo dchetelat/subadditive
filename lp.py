@@ -19,10 +19,10 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
 
         A, b = [], []
         for constraint_index, constraint in enumerate(constraints):
-            if constraints[0].Sense in {'>', '='}:
+            if constraint.Sense in {'>', '='}:
                 A.append(raw_A[constraint_index, :])
                 b.append(constraint.RHS)
-            if constraints[0].Sense in {'<', '='}:
+            if constraint.Sense in {'<', '='}:
                 A.append(-raw_A[constraint_index, :])
                 b.append(-constraint.RHS)
         A, b = np.stack(A), np.stack(b)

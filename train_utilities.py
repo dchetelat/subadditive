@@ -1,4 +1,5 @@
 import re
+import sys
 import logging
 import pickle
 from pathlib import Path
@@ -50,7 +51,7 @@ def configure_logging(output_file=None):
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
 
-        stream_handler = logging.StreamHandler()
+        stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setLevel(logging.INFO)
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)

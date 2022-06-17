@@ -81,20 +81,24 @@ if __name__ == "__main__":
 
             for future in concurrent.futures.as_completed(futures):
                 instance_path, nb_layers, gomory_init, nonlinear = futures[future]
-                lower_bounds, is_step_lp = future.result()
+                try:
+                    lower_bounds, is_step_lp = future.result()
+                    results = {"instance_path": instance_path, 
+                               "nb_layers": nb_layers,
+                               "gomory_init": gomory_init,
+                               "nonlinear": nonlinear,
+                               "learning_rate": learning_rate,
+                               "target_noise": target_noise,
+                               "seed": args.seed,
+                               "lower_bounds": lower_bounds,
+                               "is_step_lp": is_step_lp}
 
-                results = {"instance_path": instance_path, 
-                           "nb_layers": nb_layers,
-                           "gomory_init": gomory_init,
-                           "nonlinear": nonlinear,
-                           "learning_rate": learning_rate,
-                           "target_noise": target_noise,
-                           "seed": args.seed,
-                           "lower_bounds": lower_bounds,
-                           "is_step_lp": is_step_lp}
-
-                results_file = f"{instance_path.stem}_{nb_layers}_{'g' if gomory_init else 'r'}.pkl"
-                with (results_folder/results_file).open("wb") as file:
-                    pickle.dump(results, file)
+                    results_file = f"{instance_path.stem}_{nb_layers}_{'g' if gomory_init else 'r'}.pkl"
+                    with (results_folder/results_file).open("wb") as file:
+                        pickle.dump(results, file)
+                
+                except Exception as e:
+                    logger.error(f"Solving on {instance_path} with nb_layers={nb_layers}, gomory_init={gomory_init}"
+                          f", nonlinear={nonlinear} yielded exception", exc_info=e)
 
             logging.info(f"Done")
