@@ -81,12 +81,16 @@ def solve_lp(A, b, c, basis_start=None, point_start=None, verbose=False, method=
 
         if basis_start is not None:
             primal_basis, dual_basis = basis_start
-            variables.VBasis = primal_basis.cpu().numpy()
-            constraints.CBasis = dual_basis.cpu().numpy()
+            if variables.shape[0] == len(primal_basis):
+                variables.VBasis = primal_basis.cpu().numpy()
+            if constraints.shape[0] == len(dual_basis):
+                constraints.CBasis = dual_basis.cpu().numpy()
         elif point_start is not None:
             primal_start, dual_start = point_start
-            variables.PStart = primal_start.cpu().numpy()
-            constraints.DStart = dual_start.cpu().numpy()
+            if variables.shape[0] == len(primal_start):
+                variables.PStart = primal_start.cpu().numpy()
+            if constraints.shape[0] == len(dual_start):
+                constraints.DStart = dual_start.cpu().numpy()
 
         model.optimize()
 

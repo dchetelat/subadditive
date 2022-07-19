@@ -3,6 +3,7 @@ import sys
 import logging
 import pickle
 from pathlib import Path
+from itertools import product
 
 from lp import *
 from gomory import *
@@ -63,3 +64,7 @@ def path_ordering(path):
     groups = re.split("[/_.]", str(path))
     groups = [int(group) if group.isnumeric() else group for group in groups]
     return groups
+
+def dict_product(**iterable):
+    for items in product(*iterable.values()):
+        yield dict(zip(iterable.keys(), items))

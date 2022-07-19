@@ -1,8 +1,7 @@
 import argparse
 import logging
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from itertools import product
 
 from train_instance import train
 from train_utilities import *
@@ -12,10 +11,9 @@ logger = configure_logging()
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-p', '--problem',
-        help='MILP instance type to process.',
-        nargs='*',
-        default=[],
+        'problems',
+        help='MILP families to process.',
+        nargs='+',
     )
     parser.add_argument(
         '-s', '--seed',
@@ -40,32 +38,26 @@ if __name__ == "__main__":
     NB_WORKERS = args.njobs
     NB_INSTANCES = 100
 
-    if args.problem:
-        instance_families = args.problem
-    else:
-        instance_families = ['setcover', 'cauctions', 'indset', 'facilities', '2-matching']
-
-    for problem in instance_families:
-        add_variable_bounds = False
+    config = {'seed': args.seed, 'gpu': args.gpu, 'target_noise': 1e-4}
+    for problem in args.problems:
         if problem == 'setcover':
-            learning_rate = 5e-4
-            target_noise = 1e-4
+            config['learning_rate'] = 5e-4
+            config['add_variable_bounds'] = False
         elif problem == 'cauctions':
-            learning_rate = 5e-4
-            target_noise = 1e-4
+            config['learning_rate'] = 5e-4
+            config['add_variable_bounds'] = False
         elif problem == 'indset':
-            learning_rate = 5e-4
-            target_noise = 1e-4
+            config['learning_rate'] = 5e-4
+            config['add_variable_bounds'] = False
         elif problem == 'facilities':
-            learning_rate = 5e-4
-            target_noise = 1e-4
+            config['learning_rate'] = 1e-4
+            config['add_variable_bounds'] = False
         elif problem == '2-matching':
-            learning_rate = 5e-4
-            target_noise = 1e-4
-            add_variable_bounds = True
+            config['learning_rate'] = 1e-4
+            config['add_variable_bounds'] = True
         elif problem == 'small-miplib3':
-            learning_rate = 1e-4
-            target_noise = 1e-4
+            config['learning_rate'] = 1e-4
+            config['add_variable_bounds'] = True
 
         instance_folder = Path(f"instances/{problem}")
         results_folder = Path(f"results/{problem}")
@@ -73,32 +65,34 @@ if __name__ == "__main__":
         instance_paths = sorted(instance_folder.glob("*.lp"), key=path_ordering)[:NB_INSTANCES]
 
         logger.info(f"Solving {problem}")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=NB_WORKERS, thread_name_prefix='SolverThread') as executor:
-            futures = {}    
-            for config in product(instance_paths, [1, 2], [False, True], [False, True]):
-                future = executor.submit(train, *config, learning_rate, target_noise, args.seed, args.gpu, add_variable_bounds)
-                futures[future] = config
+        with ThreadPoolExecutor(max_workers=NB_WORKERS, thread_name_prefix='SolverThread') as executor:
+            configs = {}
+            for parameters in dict_product(instance_path=instance_paths, nb_layers=[1, 2], 
+                                           gomory_init=[False, True], nonlinear=[False, True]):
+                config.update(parameters)
+                future = executor.submit(train, **config)
+                configs[future] = config
 
-            for future in concurrent.futures.as_completed(futures):
-                instance_path, nb_layers, gomory_init, nonlinear = futures[future]
+            for future in as_completed(configs):
+                config = configs[future]
                 try:
                     lower_bounds, is_step_lp = future.result()
-                    results = {"instance_path": instance_path, 
-                               "nb_layers": nb_layers,
-                               "gomory_init": gomory_init,
-                               "nonlinear": nonlinear,
-                               "learning_rate": learning_rate,
-                               "target_noise": target_noise,
-                               "seed": args.seed,
+                    results = {**config,
                                "lower_bounds": lower_bounds,
                                "is_step_lp": is_step_lp}
 
-                    results_file = f"{instance_path.stem}_{nb_layers}_{'g' if gomory_init else 'r'}_{'n' if nonlinear else 'l'}.pkl"
+                    results_file = f"{config['instance_path'].stem}" + \
+                                   f"_{config['nb_layers']}" + \
+                                   f"_{'g' if config['gomory_init'] else 'r'}" + \
+                                   f"_{'n' if config['nonlinear'] else 'l'}.pkl"
                     with (results_folder/results_file).open("wb") as file:
                         pickle.dump(results, file)
                 
                 except Exception as e:
-                    logger.error(f"Solving on {instance_path} with nb_layers={nb_layers}, gomory_init={gomory_init}"
-                          f", nonlinear={nonlinear} yielded exception", exc_info=e)
+                    logger.error(f"Solving on {config['instance_path']}"
+                                 f" with nb_layers={config['nb_layers']}"
+                                 f", gomory_init={config['gomory_init']}"
+                                 f", nonlinear={config['nonlinear']}"
+                                 f" yielded exception", exc_info=e)
 
             logging.info(f"Done")

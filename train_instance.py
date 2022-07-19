@@ -26,7 +26,8 @@ class DualFunction(torch.nn.Module):
         return self.final_layer(hidden).squeeze(0)
 
 
-def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learning_rate=5e-4, target_noise=1e-4, seed=0, gpu=0, add_variable_bounds=False, nb_steps=10000):
+def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learning_rate=5e-4, target_noise=1e-4, seed=0, 
+          gpu=0, add_variable_bounds=False, nb_steps=10000):
     """
     Train a subadditive neural network to solve the subadditive dual of an instance.
     
@@ -58,7 +59,8 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
     np.random.seed(seed), torch.manual_seed(seed)
     
     A, b, c, vtypes, lp_value, lp_solution, ilp_value, \
-        ilp_solution, gomory_values = get_instance(instance_path, device=device, force_reload=True, add_variable_bounds=add_variable_bounds)
+        ilp_solution, gomory_values = get_instance(instance_path, device=device, force_reload=True, 
+                                                   add_variable_bounds=add_variable_bounds)
     dual_function = DualFunction(len(b), nb_layers, nonlinear).to(device)
     if gomory_init:
         gomory_initialization_(dual_function, A, b, c, vtypes)    
@@ -71,8 +73,13 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
         gap = (extended_A@target - extended_b)[A.shape[0]:].min().item()
 
         if step == 0 or gap < 1e-5:
-            good_rows = torch.max(extended_A.abs().max(-1).values, extended_b.abs()) > 1e-6
-            lower_bound, target, basis_start = solve_lp(extended_A[good_rows, :], extended_b[good_rows], c, 
+            # Normalize the cuts for the LP
+            cuts_A = extended_A[A.shape[0]:, :]/extended_b[A.shape[0]:].abs().unsqueeze(-1)
+            cuts_b = extended_b[A.shape[0]:]/extended_b[A.shape[0]:].abs()
+            good_cuts = cuts_A.abs().max(-1).values > 1e-6
+            cuts_A, cuts_b = cuts_A[good_cuts, :], cuts_b[good_cuts]
+            
+            lower_bound, target, basis_start = solve_lp(torch.cat([A, cuts_A]), torch.cat([b, cuts_b]), c, 
                                                         basis_start=basis_start)
             is_step_lp.append(True)
         else:
@@ -102,7 +109,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-i', '--instance_path',
+        'instance_path',
         help='Path to instance',
         type=str,
         required=True,
