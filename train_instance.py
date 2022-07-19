@@ -26,7 +26,7 @@ class DualFunction(torch.nn.Module):
         return self.final_layer(hidden).squeeze(0)
 
 
-def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learning_rate=1e-3, target_noise=1e-4, seed=0, gpu=0, nb_steps=10000):
+def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learning_rate=5e-4, target_noise=1e-4, seed=0, gpu=0, add_variable_bounds=False, nb_steps=10000):
     """
     Train a subadditive neural network to solve the subadditive dual of an instance.
     
@@ -46,30 +46,31 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
         How much noise should be added to the target in the algorithm?
     seed: int
         Seed to use.
-    nb_steps: int
-        For how many gradient steps to run the algorithm.
     gpu: int
         Which gpu to use? (cpu=-1)
+    add_variable_bounds: bool
+        Should variable bounds be added to the problem?
+    nb_steps: int
+        For how many gradient steps to run the algorithm.
     """
     short_path_name = Path(instance_path).parent.name + '/' + Path(instance_path).name
     device = f'cuda:{gpu}' if gpu>=0 else 'cpu'
     np.random.seed(seed), torch.manual_seed(seed)
     
     A, b, c, vtypes, lp_value, lp_solution, ilp_value, \
-        ilp_solution, gomory_values = get_instance(instance_path, device=device)
+        ilp_solution, gomory_values = get_instance(instance_path, device=device, force_reload=True, add_variable_bounds=add_variable_bounds)
     dual_function = DualFunction(len(b), nb_layers, nonlinear).to(device)
     if gomory_init:
         gomory_initialization_(dual_function, A, b, c, vtypes)    
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=learning_rate)
 
-    target, lower_bound = lp_solution, lp_value
-    lower_bound = gomory_values[nb_layers] if gomory_init else lp_value 
-    lower_bounds, is_step_lp, basis_start = [lower_bound], [True], None
+    target, lower_bound = lp_solution, None
+    lower_bounds, is_step_lp, basis_start = [], [], None
     for step in range(nb_steps):
         extended_A, extended_b, c, vtypes = add_cuts_to_ilp(dual_function.inner_layers, A, b, c, vtypes)
         gap = (extended_A@target - extended_b)[A.shape[0]:].min().item()
 
-        if gap < 1e-5:
+        if step == 0 or gap < 1e-5:
             good_rows = torch.max(extended_A.abs().max(-1).values, extended_b.abs()) > 1e-6
             lower_bound, target, basis_start = solve_lp(extended_A[good_rows, :], extended_b[good_rows], c, 
                                                         basis_start=basis_start)
@@ -115,13 +116,14 @@ if __name__ == "__main__":
     parser.add_argument(
         '-gi', '--gomory_init',
         help='Should the layers be Gomory initialized?',
-        type=bool,
+        # type=bool,
+        action='store_true',
         default=train_parameters['gomory_init'].default,
     )
     parser.add_argument(
         '-nl', '--nonlinear',
         help='Should nonlinear cuts be used?',
-        type=bool,
+        action='store_true',
         default=train_parameters['gomory_init'].default,
     )
     parser.add_argument(
@@ -147,6 +149,13 @@ if __name__ == "__main__":
         help='GPU (-1 for CPU)',
         type=int,
         default=train_parameters['gpu'].default,
+    )
+    parser.add_argument(
+        '-vb', '--add_variable_bounds',
+        help='Should variable bounds be added to the problem?',
+        # type=bool,
+        action='store_true',
+        default=train_parameters['add_variable_bounds'].default,
     )
     parser.add_argument(
         '-ns', '--nb_steps',

@@ -46,6 +46,7 @@ if __name__ == "__main__":
         instance_families = ['setcover', 'cauctions', 'indset', 'facilities', '2-matching']
 
     for problem in instance_families:
+        add_variable_bounds = False
         if problem == 'setcover':
             learning_rate = 5e-4
             target_noise = 1e-4
@@ -59,13 +60,12 @@ if __name__ == "__main__":
             learning_rate = 5e-4
             target_noise = 1e-4
         elif problem == '2-matching':
-            learning_rate = 1e-4
-            target_noise = 5e-4
-            OBJECTIVE_NOISE = 1e-3
+            learning_rate = 5e-4
+            target_noise = 1e-4
+            add_variable_bounds = True
         elif problem == 'small-miplib3':
             learning_rate = 1e-4
             target_noise = 1e-4
-            OBJECTIVE_NOISE = 0
 
         instance_folder = Path(f"instances/{problem}")
         results_folder = Path(f"results/{problem}")
@@ -74,9 +74,9 @@ if __name__ == "__main__":
 
         logger.info(f"Solving {problem}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=NB_WORKERS, thread_name_prefix='SolverThread') as executor:
-            futures = {}
+            futures = {}    
             for config in product(instance_paths, [1, 2], [False, True], [False, True]):
-                future = executor.submit(train, *config, learning_rate, target_noise, args.seed, args.gpu)
+                future = executor.submit(train, *config, learning_rate, target_noise, args.seed, args.gpu, add_variable_bounds)
                 futures[future] = config
 
             for future in concurrent.futures.as_completed(futures):
@@ -93,7 +93,7 @@ if __name__ == "__main__":
                                "lower_bounds": lower_bounds,
                                "is_step_lp": is_step_lp}
 
-                    results_file = f"{instance_path.stem}_{nb_layers}_{'g' if gomory_init else 'r'}.pkl"
+                    results_file = f"{instance_path.stem}_{nb_layers}_{'g' if gomory_init else 'r'}_{'n' if nonlinear else 'l'}.pkl"
                     with (results_folder/results_file).open("wb") as file:
                         pickle.dump(results, file)
                 

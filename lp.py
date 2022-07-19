@@ -5,13 +5,19 @@ import torch
 
 
 def load_instance(instance_path, device="cpu", add_variable_bounds=False, presolve=True):
-    with gp.Env(empty=True) as env:
-        env.setParam('OutputFlag', 0)
+    with gp.Env(params={'OutputFlag': 0}) as env:
         env.start()
 
         model = gp.read(str(instance_path), env=env)
         if presolve:
             model = model.presolve()
+        if add_variable_bounds:
+            for variable in model.getVars():
+                model.addConstr(variable <= variable.UB)
+                if variable.VTYPE == GRB.BINARY:
+                    variable.VType = GRB.INTEGER
+                variable.UB = np.inf
+            model.update()
 
         constraints, variables = model.getConstrs(), model.getVars()
         m, n = len(constraints), len(variables)
@@ -32,24 +38,6 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
             c.append(model.ModelSense*variable.Obj)
             vtypes.append(variable.VType)
         c, vtypes = np.stack(c), np.stack(vtypes)
-
-        # Add variable upper bounds if desired
-        if add_variable_bounds:
-            upper_bounds_A, upper_bounds_b = [], []
-            for variable_index, variable in enumerate(variables):
-                if variable.UB is not None and variable.UB < np.inf:
-                    upper_bound_A = torch.zeros((1, A.shape[1]))
-                    upper_bound_A[0, variable_index] = -1
-                    upper_bounds_A.append(upper_bound_A)
-                    if variable.VType == GRB.BINARY:
-                        upper_bounds_b.append(-1)
-                    elif variable.VType == GRB.INTEGER:
-                        upper_bounds_b.append(-np.floor(variable.UB))
-                    elif variable.VType == GRB.CONTINUOUS:
-                        upper_bounds_b.append(-variable.UB)
-            upper_bounds_A = np.concatenate(upper_bounds_A, axis=0)
-            A = np.concatenate([A, upper_bounds_A], axis=0)
-            b = np.concatenate([b, np.array(upper_bounds_b)])
 
         # Convert lower bounds to >= 0
         variable_index, objective_offset = 0, np.zeros(1)
@@ -72,12 +60,10 @@ def solve_lp(A, b, c, basis_start=None, point_start=None, verbose=False, method=
     device, dtype = A.device, A.dtype
     A, b, c = A.detach().cpu().numpy(), b.detach().cpu().numpy(), c.detach().cpu().numpy()
 
-    with gp.Env(empty=True) as env:
-        if not verbose:
-            env.setParam('OutputFlag', 0)
+    with gp.Env(params={'OutputFlag': verbose}) as env:
         env.start()
+        
         model = gp.Model(env=env)
-
         variables = model.addMVar(shape=len(c), vtype=GRB.CONTINUOUS)
         model.setObjective(c @ variables, GRB.MINIMIZE)
         constraints = model.addConstr(A @ variables >= b)
@@ -88,6 +74,7 @@ def solve_lp(A, b, c, basis_start=None, point_start=None, verbose=False, method=
         elif method == 'ipm':
             model.params.Method = 2
             model.params.Crossover = 0
+            model.params.FeasibilityTol = 1e-3
         else:
             raise Exception(f"Unrecognized LP method '{method}'")
         model.update()
@@ -124,9 +111,7 @@ def solve_ilp(A, b, c, vtypes, verbose=False):
     device, dtype = A.device, A.dtype
     A, b, c = A.detach().cpu().numpy(), b.detach().cpu().numpy(), c.detach().cpu().numpy()
 
-    with gp.Env(empty=True) as env:
-        if not verbose:
-            env.setParam('OutputFlag', 0)
+    with gp.Env(params={'OutputFlag': verbose}) as env:
         env.start()
         
         model = gp.Model(env=env)
