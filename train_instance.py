@@ -13,21 +13,21 @@ logger = configure_logging()
 
 
 class DualFunction(torch.nn.Module):
-    def __init__(self, input_size, nb_layers, nonlinear=False):
+    def __init__(self, input_size, nb_layers, nonlinear=False, size=32):
         super().__init__()
         self.inner_layers = SequentialSubadditive(
-            *[Cat(GomoryLayer(input_size + 32*layer, 32, nonlinear)) 
+            *[Cat(GomoryLayer(input_size + size*layer, size, nonlinear)) 
              for layer in range(nb_layers)]
         )
-        self.final_layer = LinearLayer(input_size+32*nb_layers, 1)
+        self.final_layer = LinearLayer(input_size+size*nb_layers, 1)
     
     def forward(self, bias):
         hidden = self.inner_layers(bias)
         return self.final_layer(hidden).squeeze(0)
 
 
-def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learning_rate=5e-4, target_noise=1e-4, seed=0, 
-          gpu=0, add_variable_bounds=False, nb_steps=10000):
+def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learning_rate=5e-4, target_noise=1e-4, 
+          size=32, seed=0, gpu=0, add_variable_bounds=False, nb_steps=10000):
     """
     Train a subadditive neural network to solve the subadditive dual of an instance.
     
@@ -45,6 +45,8 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
         The learning rate of the optimization.
     target_noise: float
         How much noise should be added to the target in the algorithm?
+    size: int
+        Number of neurons (cuts) per layer.
     seed: int
         Seed to use.
     gpu: int
@@ -61,13 +63,14 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
     A, b, c, vtypes, lp_value, lp_solution, ilp_value, \
         ilp_solution, gomory_values = get_instance(instance_path, device=device, force_reload=True, 
                                                    add_variable_bounds=add_variable_bounds)
-    dual_function = DualFunction(len(b), nb_layers, nonlinear).to(device)
+    dual_function = DualFunction(len(b), nb_layers, nonlinear, size).to(device)
     if gomory_init:
         gomory_initialization_(dual_function, A, b, c, vtypes)    
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=learning_rate)
 
     target, lower_bound = lp_solution, None
-    lower_bounds, is_step_lp, basis_start = [], [], None
+    target_set = TensorSet()
+    lower_bounds, is_step_lp, nb_targets, basis_start = [], [], [], None
     for step in range(nb_steps):
         extended_A, extended_b, c, vtypes = add_cuts_to_ilp(dual_function.inner_layers, A, b, c, vtypes)
         gap = (extended_A@target - extended_b)[A.shape[0]:].min().item()
@@ -81,10 +84,12 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
             
             lower_bound, target, basis_start = solve_lp(torch.cat([A, cuts_A]), torch.cat([b, cuts_b]), c, 
                                                         basis_start=basis_start)
+            target_set.append(target)
             is_step_lp.append(True)
         else:
             is_step_lp.append(False)
         lower_bounds.append(lower_bound)
+        nb_targets.append(len(target_set))
 
         noisy_target = (target + target_noise*torch.randn_like(target)).relu()
         loss = extended_A@noisy_target - extended_b
@@ -101,7 +106,7 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
                         f", gomory {gomory_values[nb_layers]: >6.2f}, optimal {ilp_value: >6.2f}"
                         f"   (gap {gap: >6.2f}, nb lps {np.sum(is_step_lp)})")
     
-    return np.array(lower_bounds), np.array(is_step_lp)
+    return np.array(lower_bounds), np.array(is_step_lp), np.array(nb_targets)
 
 
 if __name__ == "__main__":
@@ -144,6 +149,12 @@ if __name__ == "__main__":
         help='Target noise',
         type=float,
         default=train_parameters['target_noise'].default,
+    )
+    parser.add_argument(
+        '-sz', '--size',
+        help='Number of neurons (cuts) per layer',
+        type=int,
+        default=train_parameters['seed'].default,
     )
     parser.add_argument(
         '-s', '--seed',

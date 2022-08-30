@@ -9,6 +9,18 @@ from lp import *
 from gomory import *
 
 
+class TensorSet():
+    def __init__(self, set_=None):
+        self._set = set_ if set_ is not None else set()
+    
+    def __len__(self):
+        return len(self._set)
+    
+    def append(self, new_tensor):
+        new_tensor = tuple(new_tensor.detach().cpu().numpy().tolist())
+        self._set.update({new_tensor})
+
+
 def get_instance(instance_path, add_variable_bounds=False, presolve=True, force_reload=False, device="cpu"):
     instance_path = Path(instance_path)
     

@@ -42,57 +42,80 @@ if __name__ == "__main__":
     for problem in args.problems:
         if problem == 'setcover':
             config['learning_rate'] = 5e-4
+            config['size'] = 32
             config['add_variable_bounds'] = False
+            config['nb_steps'] = 10000
         elif problem == 'cauctions':
             config['learning_rate'] = 5e-4
+            config['size'] = 32
             config['add_variable_bounds'] = False
+            config['nb_steps'] = 10000
         elif problem == 'indset':
             config['learning_rate'] = 5e-4
+            config['size'] = 32
             config['add_variable_bounds'] = False
+            config['nb_steps'] = 10000
         elif problem == 'facilities':
             config['learning_rate'] = 1e-4
+            config['size'] = 32
             config['add_variable_bounds'] = False
+            config['nb_steps'] = 10000
         elif problem == '2-matching':
             config['learning_rate'] = 1e-4
+            config['size'] = 1024
             config['add_variable_bounds'] = True
+            config['nb_steps'] = 10000
         elif problem == 'small-miplib3':
             config['learning_rate'] = 1e-4
+            config['size'] = 1024
             config['add_variable_bounds'] = True
+            config['nb_steps'] = 50000
 
         instance_folder = Path(f"instances/{problem}")
-        results_folder = Path(f"results/{problem}")
+        results_folder = Path(f"results/{problem}-50k")
         results_folder.mkdir(parents=True, exist_ok=True)
-        instance_paths = sorted(instance_folder.glob("*.lp"), key=path_ordering)[:NB_INSTANCES]
+        instance_paths = list(instance_folder.glob("*.lp"))+list(instance_folder.glob("*.mps.gz"))
+        instance_paths = sorted(instance_paths, key=path_ordering)[:NB_INSTANCES]
 
         logger.info(f"Solving {problem}")
         with ThreadPoolExecutor(max_workers=NB_WORKERS, thread_name_prefix='SolverThread') as executor:
-            configs = {}
+            train_configs = {}
             for parameters in dict_product(instance_path=instance_paths, nb_layers=[1, 2], 
                                            gomory_init=[False, True], nonlinear=[False, True]):
-                config.update(parameters)
-                future = executor.submit(train, **config)
-                configs[future] = config
+                
+                train_config = {**config, **parameters}
+                
+                # DEBUG
+                results_file = f"{train_config['instance_path'].stem}" + \
+                                   f"_{train_config['nb_layers']}" + \
+                                   f"_{'g' if train_config['gomory_init'] else 'r'}" + \
+                                   f"_{'n' if train_config['nonlinear'] else 'l'}.pkl"
+                if not (results_folder/results_file).is_file():
+                    future = executor.submit(train, **train_config)
+                    train_configs[future] = train_config
 
-            for future in as_completed(configs):
-                config = configs[future]
+            for future in as_completed(train_configs):
+                train_config = train_configs[future]
                 try:
-                    lower_bounds, is_step_lp = future.result()
-                    results = {**config,
+                    lower_bounds, is_step_lp, nb_targets = future.result()
+                    results = {**train_config,
                                "lower_bounds": lower_bounds,
-                               "is_step_lp": is_step_lp}
+                               "is_step_lp": is_step_lp,
+                               "nb_targets": nb_targets}
 
-                    results_file = f"{config['instance_path'].stem}" + \
-                                   f"_{config['nb_layers']}" + \
-                                   f"_{'g' if config['gomory_init'] else 'r'}" + \
-                                   f"_{'n' if config['nonlinear'] else 'l'}.pkl"
+                    results_file = f"{train_config['instance_path'].stem}" + \
+                                   f"_{train_config['nb_layers']}" + \
+                                   f"_{'g' if train_config['gomory_init'] else 'r'}" + \
+                                   f"_{'n' if train_config['nonlinear'] else 'l'}.pkl"
+                    logger.info(f"Saving {results_file}")
                     with (results_folder/results_file).open("wb") as file:
                         pickle.dump(results, file)
                 
                 except Exception as e:
-                    logger.error(f"Solving on {config['instance_path']}"
-                                 f" with nb_layers={config['nb_layers']}"
-                                 f", gomory_init={config['gomory_init']}"
-                                 f", nonlinear={config['nonlinear']}"
+                    logger.error(f"Solving on {train_config['instance_path']}"
+                                 f" with nb_layers={train_config['nb_layers']}"
+                                 f", gomory_init={train_config['gomory_init']}"
+                                 f", nonlinear={train_config['nonlinear']}"
                                  f" yielded exception", exc_info=e)
 
             logging.info(f"Done")

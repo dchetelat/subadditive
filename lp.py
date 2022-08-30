@@ -21,7 +21,7 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
 
         constraints, variables = model.getConstrs(), model.getVars()
         m, n = len(constraints), len(variables)
-        raw_A = model.getA().todense()
+        raw_A = np.array(model.getA().todense())
 
         A, b = [], []
         for constraint_index, constraint in enumerate(constraints):
