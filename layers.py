@@ -129,7 +129,7 @@ def add_cuts_to_ilp(cut_function, A, b, c, vtypes):
     integer_vars = np.isin(vtypes, [GRB.BINARY, GRB.INTEGER])
     continuous_vars = np.isin(vtypes, [GRB.CONTINUOUS])
 
-    extended_A = torch.empty(cut_function.out_size, len(c), device=A.device)
+    extended_A = torch.empty(cut_function.out_size, len(c), device=A.device, dtype=A.dtype)
     extended_A[:, integer_vars] = cut_function(A[:, integer_vars])
     extended_A[:, continuous_vars] = cut_function.upper(A[:, continuous_vars])
     extended_b = cut_function(b)

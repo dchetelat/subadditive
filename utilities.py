@@ -3,7 +3,7 @@ import torch
 
 def weighted_tri(x, scale=None, scale_cmp=None):
     if scale is None:
-        scale = torch.FloatTensor([0.5]).squeeze().to(x.device)
+        scale = torch.DoubleTensor([0.5]).squeeze().to(x.device)
     scale = expand_dims(scale, x)
 
     return torch.min(frac(x)/scale, (1-frac(x))/(1-scale))
@@ -11,7 +11,7 @@ def weighted_tri(x, scale=None, scale_cmp=None):
 
 def weighted_abs(x, scale=None, scale_cmp=None):
     if scale is None:
-        scale = torch.FloatTensor([0.5]).squeeze().to(x.device)
+        scale = torch.DoubleTensor([0.5]).squeeze().to(x.device)
     scale = expand_dims(scale, x)
 
     return torch.max(x/scale, -x/(1-scale))

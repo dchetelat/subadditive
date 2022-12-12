@@ -4,13 +4,13 @@ from layers import *
 from utilities import *
 
 
-def compute_gomory_bounds(A, b, c, vtypes, nb_rounds):
+def compute_gomory_bounds(A, b, c, vtypes, nb_rounds, nonlinear=False):
     gomory_bounds = []
     for _ in range(nb_rounds+1):
         M, v, gomory_bound = compute_gomory_weights(A, b, c, vtypes)
         gomory_bounds.append(gomory_bound)
 
-        layer = Cat(GomoryLayer(len(b), len(v)))
+        layer = Cat(GomoryLayer(len(b), len(v), nonlinear=nonlinear))
         layer.layer.M.data = M
         layer.layer.v.data = v
 

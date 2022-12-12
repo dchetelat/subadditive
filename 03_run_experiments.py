@@ -6,7 +6,7 @@ from pathlib import Path
 from train_instance import train
 from train_utilities import *
 
-logger = configure_logging()
+logger = configure_logging("train_log.txt")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -72,7 +72,7 @@ if __name__ == "__main__":
             config['nb_steps'] = 50000
 
         instance_folder = Path(f"instances/{problem}")
-        results_folder = Path(f"results/{problem}-50k")
+        results_folder = Path(f"results/{problem}")
         results_folder.mkdir(parents=True, exist_ok=True)
         instance_paths = list(instance_folder.glob("*.lp"))+list(instance_folder.glob("*.mps.gz"))
         instance_paths = sorted(instance_paths, key=path_ordering)[:NB_INSTANCES]
@@ -85,7 +85,6 @@ if __name__ == "__main__":
                 
                 train_config = {**config, **parameters}
                 
-                # DEBUG
                 results_file = f"{train_config['instance_path'].stem}" + \
                                    f"_{train_config['nb_layers']}" + \
                                    f"_{'g' if train_config['gomory_init'] else 'r'}" + \
@@ -97,11 +96,13 @@ if __name__ == "__main__":
             for future in as_completed(train_configs):
                 train_config = train_configs[future]
                 try:
-                    lower_bounds, is_step_lp, nb_targets = future.result()
+                    lower_bounds, is_step_lp, nb_targets, final_problem, ilp_value = future.result()
                     results = {**train_config,
                                "lower_bounds": lower_bounds,
                                "is_step_lp": is_step_lp,
-                               "nb_targets": nb_targets}
+                               "nb_targets": nb_targets,
+                               "final_problem": final_problem,
+                               "ilp_value": ilp_value}
 
                     results_file = f"{train_config['instance_path'].stem}" + \
                                    f"_{train_config['nb_layers']}" + \

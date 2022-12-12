@@ -1,4 +1,5 @@
 import torch
+torch.set_default_dtype(torch.float64)
 import argparse
 from inspect import signature
 
@@ -9,8 +10,31 @@ from utilities import *
 from train_utilities import *
 
 SEED = 0
-logger = configure_logging()
+logger = configure_logging("train_log.txt")
 
+class GomoryLayer(SubadditiveLayer):
+    def __init__(self, in_size, out_size, nonlinear=False):
+        super().__init__()
+        self.M = torch.nn.Parameter(torch.Tensor(out_size, in_size))
+        self.v = torch.nn.Parameter(torch.Tensor(out_size))
+        if out_size > 0:
+            torch.nn.init.orthogonal_(self.M)
+            torch.nn.init.normal_(self.v)
+        
+        self.in_size = in_size
+        self.out_size = out_size
+        self.nonlinear = nonlinear
+        
+    def forward(self, input_):
+        scale = self.v.sigmoid()
+        if self.nonlinear:
+            return torch.log(1+weighted_tri(self.M@input_, scale)) + weighted_abs(-self.M, scale)@input_
+        else:
+            return weighted_tri(self.M@input_, scale) + weighted_abs(-self.M, scale)@input_
+    
+    def upper(self, input_):
+        scale = self.v.sigmoid()
+        return weighted_abs(self.M@input_, scale) + weighted_abs(-self.M, scale)@input_
 
 class DualFunction(torch.nn.Module):
     def __init__(self, input_size, nb_layers, nonlinear=False, size=32):
@@ -77,8 +101,9 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
 
         if step == 0 or gap < 1e-5:
             # Normalize the cuts for the LP
-            cuts_A = extended_A[A.shape[0]:, :]/extended_b[A.shape[0]:].abs().unsqueeze(-1)
-            cuts_b = extended_b[A.shape[0]:]/extended_b[A.shape[0]:].abs()
+            cut_norms = extended_b[A.shape[0]:].abs() + 1e-5
+            cuts_A = extended_A[A.shape[0]:, :]/cut_norms.unsqueeze(-1)
+            cuts_b = extended_b[A.shape[0]:]/cut_norms
             good_cuts = cuts_A.abs().max(-1).values > 1e-6
             cuts_A, cuts_b = cuts_A[good_cuts, :], cuts_b[good_cuts]
             
@@ -106,7 +131,8 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
                         f", gomory {gomory_values[nb_layers]: >6.2f}, optimal {ilp_value: >6.2f}"
                         f"   (gap {gap: >6.2f}, nb lps {np.sum(is_step_lp)})")
     
-    return np.array(lower_bounds), np.array(is_step_lp), np.array(nb_targets)
+    final_problem = (extended_A.detach().cpu(), extended_b.detach().cpu(), c.cpu(), vtypes)
+    return np.array(lower_bounds), np.array(is_step_lp), np.array(nb_targets), final_problem, ilp_value
 
 
 if __name__ == "__main__":

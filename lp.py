@@ -40,7 +40,7 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
         c, vtypes = np.stack(c), np.stack(vtypes)
 
         # Convert lower bounds to >= 0
-        variable_index, objective_offset = 0, np.zeros(1)
+        variable_index, objective_offset = 0, model.ObjCon
         for variable in variables:
             if variable.LB is None or variable.LB == -np.inf:
                 A = np.insert(A, variable_index+1, -A[:, variable_index], axis=1)
@@ -52,8 +52,8 @@ def load_instance(instance_path, device="cpu", add_variable_bounds=False, presol
                 objective_offset += c[variable_index]*variables[variable_index].LB
             variable_index += 1
 
-        return torch.FloatTensor(A).to(device), torch.FloatTensor(b).to(device), \
-            torch.FloatTensor(c).to(device), vtypes, objective_offset
+        return torch.DoubleTensor(A).to(device), torch.DoubleTensor(b).to(device), \
+            torch.DoubleTensor(c).to(device), vtypes, objective_offset
 
 
 def solve_lp(A, b, c, basis_start=None, point_start=None, verbose=False, method='simplex'):
@@ -96,9 +96,9 @@ def solve_lp(A, b, c, basis_start=None, point_start=None, verbose=False, method=
 
         if model.Status == GRB.OPTIMAL:
             optimal_value = model.objVal
-            primal_solution = torch.Tensor(variables.X).to(device=device, dtype=dtype)
-            dual_solution = torch.Tensor(constraints.Pi).to(device=device, dtype=dtype)
-            reduced_costs = torch.Tensor(variables.RC).to(device=device, dtype=dtype)
+            primal_solution = torch.DoubleTensor(variables.X).to(device=device, dtype=dtype)
+            dual_solution = torch.DoubleTensor(constraints.Pi).to(device=device, dtype=dtype)
+            reduced_costs = torch.DoubleTensor(variables.RC).to(device=device, dtype=dtype)
             if method == 'simplex':
                 primal_basis = torch.LongTensor(variables.VBasis).to(device)
                 dual_basis = torch.LongTensor(constraints.CBasis).to(device)
@@ -127,7 +127,7 @@ def solve_ilp(A, b, c, vtypes, verbose=False):
         model.optimize()
         if model.Status == GRB.OPTIMAL:
             optimal_value = model.objVal
-            optimal_solution = torch.Tensor(variables.X).to(device=device, dtype=dtype)
+            optimal_solution = torch.DoubleTensor(variables.X).to(device=device, dtype=dtype)
             return optimal_value, optimal_solution
         else:
             return None
