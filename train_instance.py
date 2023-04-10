@@ -1,3 +1,4 @@
+import time
 import torch
 torch.set_default_dtype(torch.float64)
 import argparse
@@ -91,9 +92,10 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
     if gomory_init:
         gomory_initialization_(dual_function, A, b, c, vtypes)    
     optimizer = torch.optim.Adam(dual_function.parameters(), lr=learning_rate)
-
+    
     target, lower_bound = lp_solution, None
     target_set = TensorSet()
+    time_start = time.perf_counter()
     lower_bounds, is_step_lp, nb_targets, basis_start = [], [], [], None
     for step in range(nb_steps):
         extended_A, extended_b, c, vtypes = add_cuts_to_ilp(dual_function.inner_layers, A, b, c, vtypes)
@@ -131,8 +133,11 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
                         f", gomory {gomory_values[nb_layers]: >6.2f}, optimal {ilp_value: >6.2f}"
                         f"   (gap {gap: >6.2f}, nb lps {np.sum(is_step_lp)})")
     
+    
+    time_end = time.perf_counter()
+    solving_time = time_end - time_start
     final_problem = (extended_A.detach().cpu(), extended_b.detach().cpu(), c.cpu(), vtypes)
-    return np.array(lower_bounds), np.array(is_step_lp), np.array(nb_targets), final_problem, ilp_value
+    return np.array(lower_bounds), np.array(is_step_lp), np.array(nb_targets), final_problem, ilp_value, solving_time
 
 
 if __name__ == "__main__":

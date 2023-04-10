@@ -77,7 +77,7 @@ if __name__ == "__main__":
         instance_paths = list(instance_folder.glob("*.lp"))+list(instance_folder.glob("*.mps.gz"))
         instance_paths = sorted(instance_paths, key=path_ordering)[:NB_INSTANCES]
 
-        logger.info(f"Solving {problem}")
+        logger.info(f"Solving {problem} [{len(instance_paths)} instances]")
         with ThreadPoolExecutor(max_workers=NB_WORKERS, thread_name_prefix='SolverThread') as executor:
             train_configs = {}
             for parameters in dict_product(instance_path=instance_paths, nb_layers=[1, 2], 
@@ -96,13 +96,14 @@ if __name__ == "__main__":
             for future in as_completed(train_configs):
                 train_config = train_configs[future]
                 try:
-                    lower_bounds, is_step_lp, nb_targets, final_problem, ilp_value = future.result()
+                    lower_bounds, is_step_lp, nb_targets, final_problem, ilp_value, solving_time = future.result()
                     results = {**train_config,
                                "lower_bounds": lower_bounds,
                                "is_step_lp": is_step_lp,
                                "nb_targets": nb_targets,
                                "final_problem": final_problem,
-                               "ilp_value": ilp_value}
+                               "ilp_value": ilp_value,
+                               "solving_time": solving_time}
 
                     results_file = f"{train_config['instance_path'].stem}" + \
                                    f"_{train_config['nb_layers']}" + \
