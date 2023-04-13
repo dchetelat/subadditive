@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from gomory import *
 from lp import *
 from train_utilities import *
-from train_instance import DualFunction
+from train_instance import CutFunction
 
 logger = configure_logging()
 
@@ -59,9 +59,9 @@ def compute_solving_statistics(results_file_path):
 
     A, b, c = cuts_A[:-nb_cuts], cuts_b[:-nb_cuts], cuts_c
 
-    dual_function = DualFunction(len(b), results['nb_layers'], results['nonlinear'], results['size'])
-    gomory_initialization_(dual_function, A, b, c, vtypes)
-    gomory_A, gomory_b, gomory_c, vtypes = add_cuts_to_ilp(dual_function.inner_layers, A, b, c, vtypes)
+    cut_function = CutFunction(len(b), results['nb_layers'], results['nonlinear'], results['size'])
+    gomory_initialization_(cut_function, A, b, c, vtypes)
+    gomory_A, gomory_b, gomory_c, vtypes = add_cuts_to_ilp(cut_function.inner_layers, A, b, c, vtypes)
 
     full_gomory_A, full_gomory_b, full_gomory_c, vtypes = full_gomory(A, b, c, vtypes, results['nb_layers'])
 

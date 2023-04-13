@@ -72,7 +72,7 @@ if __name__ == "__main__":
             config['nb_steps'] = 50000
 
         instance_folder = Path(f"instances/{problem}")
-        results_folder = Path(f"results/{problem}")
+        results_folder = Path(f"results/{problem}-renormalized") # DEBUG
         results_folder.mkdir(parents=True, exist_ok=True)
         instance_paths = list(instance_folder.glob("*.lp"))+list(instance_folder.glob("*.mps.gz"))
         instance_paths = sorted(instance_paths, key=path_ordering)[:NB_INSTANCES]

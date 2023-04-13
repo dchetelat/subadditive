@@ -13,31 +13,8 @@ from train_utilities import *
 SEED = 0
 logger = configure_logging("train_log.txt")
 
-class GomoryLayer(SubadditiveLayer):
-    def __init__(self, in_size, out_size, nonlinear=False):
-        super().__init__()
-        self.M = torch.nn.Parameter(torch.Tensor(out_size, in_size))
-        self.v = torch.nn.Parameter(torch.Tensor(out_size))
-        if out_size > 0:
-            torch.nn.init.orthogonal_(self.M)
-            torch.nn.init.normal_(self.v)
-        
-        self.in_size = in_size
-        self.out_size = out_size
-        self.nonlinear = nonlinear
-        
-    def forward(self, input_):
-        scale = self.v.sigmoid()
-        if self.nonlinear:
-            return torch.log(1+weighted_tri(self.M@input_, scale)) + weighted_abs(-self.M, scale)@input_
-        else:
-            return weighted_tri(self.M@input_, scale) + weighted_abs(-self.M, scale)@input_
-    
-    def upper(self, input_):
-        scale = self.v.sigmoid()
-        return weighted_abs(self.M@input_, scale) + weighted_abs(-self.M, scale)@input_
 
-class DualFunction(torch.nn.Module):
+class CutFunction(torch.nn.Module):
     def __init__(self, input_size, nb_layers, nonlinear=False, size=32):
         super().__init__()
         self.inner_layers = SequentialSubadditive(
@@ -88,17 +65,17 @@ def train(instance_path, nb_layers=1, gomory_init=False, nonlinear=False, learni
     A, b, c, vtypes, lp_value, lp_solution, ilp_value, \
         ilp_solution, gomory_values = get_instance(instance_path, device=device, force_reload=True, 
                                                    add_variable_bounds=add_variable_bounds)
-    dual_function = DualFunction(len(b), nb_layers, nonlinear, size).to(device)
+    cut_function = CutFunction(len(b), nb_layers, nonlinear, size).to(device)
     if gomory_init:
-        gomory_initialization_(dual_function, A, b, c, vtypes)    
-    optimizer = torch.optim.Adam(dual_function.parameters(), lr=learning_rate)
+        gomory_initialization_(cut_function, A, b, c, vtypes)    
+    optimizer = torch.optim.Adam(cut_function.parameters(), lr=learning_rate)
     
     target, lower_bound = lp_solution, None
     target_set = TensorSet()
     time_start = time.perf_counter()
     lower_bounds, is_step_lp, nb_targets, basis_start = [], [], [], None
     for step in range(nb_steps):
-        extended_A, extended_b, c, vtypes = add_cuts_to_ilp(dual_function.inner_layers, A, b, c, vtypes)
+        extended_A, extended_b, c, vtypes = add_cuts_to_ilp(cut_function.inner_layers, A, b, c, vtypes)
         gap = (extended_A@target - extended_b)[A.shape[0]:].min().item()
 
         if step == 0 or gap < 1e-5:
@@ -148,7 +125,6 @@ if __name__ == "__main__":
         'instance_path',
         help='Path to instance',
         type=str,
-        required=True,
     )
     parser.add_argument(
         '-l', '--nb_layers',
@@ -167,7 +143,7 @@ if __name__ == "__main__":
         '-nl', '--nonlinear',
         help='Should nonlinear cuts be used?',
         action='store_true',
-        default=train_parameters['gomory_init'].default,
+        default=train_parameters['nonlinear'].default,
     )
     parser.add_argument(
         '-lr', '--learning_rate',
@@ -185,7 +161,7 @@ if __name__ == "__main__":
         '-sz', '--size',
         help='Number of neurons (cuts) per layer',
         type=int,
-        default=train_parameters['seed'].default,
+        default=train_parameters['size'].default,
     )
     parser.add_argument(
         '-s', '--seed',
